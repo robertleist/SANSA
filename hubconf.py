@@ -1,6 +1,6 @@
 # hubconf.py
 
-dependencies = ["torch"]
+dependencies = ["torch", "py3_wget", "hydra", "omegaconf"]
 
 import torch
 from models.sansa.sansa import build_sansa
