@@ -45,12 +45,13 @@ https://github.com/user-attachments/assets/b8c81a27-d8d5-496d-ae3e-eaefd5a7cf90
 
 ## ⚙️ Environment Setup  
 To get started, create a Conda environment and install the required dependencies.
-SANSA has been tested with **Python 3.10** and **PyTorch 2.3.1 (with CUDA 11.8)**. To set up the environment using Conda, run:  
+SANSA is compatible with any **PyTorch ≥ 2.0**.
+The experiments in the paper were run with **PyTorch 2.7.1 (with CUDA 12.6)**, which we provide as a reference configuration. 
+To set up the environment using Conda, run:  
 
 ```
 conda create --name sansa python=3.10 -y
 conda activate sansa
-pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu118
 pip install -r requirements.txt
 ```
 ---
@@ -67,22 +68,86 @@ In this repository, you will find:
 ## 1. SANSA Universal Model 🌐
 _Run on your own data (objects & parts, promptable with points · boxes · scribbles · masks)._
 
-#### Quick Links: 📥 **[Download Weights](https://drive.google.com/file/d/1nPOdRfMfo3MQRSi1qkPEri7Gl6FCEVHe)** · 🧑‍💻 **[Interactive Notebook](https://colab.research.google.com/github/ClaudiaCuttano/SANSA/blob/main/sansa_demo.ipynb)** · 📦 **TorchHub** (Coming Soon)  
+#### Quick Links: 📥 **[Download Weights](https://drive.google.com/file/d/1nPOdRfMfo3MQRSi1qkPEri7Gl6FCEVHe)** · 🧑‍💻 **[Interactive Notebook](https://colab.research.google.com/github/ClaudiaCuttano/SANSA/blob/main/sansa_demo.ipynb)** · 📦 [**TorchHub**](#torchhub)
+  
 
 ---
-
 ### 🧑‍💻 Interactive Demo (Colab)  
 Curious about SANSA? The **[Notebook](https://colab.research.google.com/github/ClaudiaCuttano/SANSA/blob/main/sansa_demo.ipynb)** lets you try it out. Mark **an object or part in one image** (point, box, scribble, or mask), and SANSA will segment the same class in the following images.   
-💡 Example: draw a quick box around a car, and SANSA finds the cars in the next images.  
+💡 Example: draw a quick box around a person, and SANSA finds all the people in the next images.  
 
 <p align="center">
   <img src="assets/sansa_promptable.gif" alt="Demo GIF" width="600">
 </p>
 
-
 ----
+<a id="torchhub"></a>
+### 📦 TorcHub
+Below is a minimal example showing how to load SANSA from TorchHub and run inference.
+Use point, box, or mask prompts depending on your application.
+<details>
+<summary><strong>Expand for 'def format_prompt' function</strong></summary>
+
+```python
+def format_prompt(n_shots: int, prompt_input, prompt_type: str, device: torch.device = torch.device('cuda')):
+    """
+    Format prompt to be fed to the SANSA model. Alternatively, import as 'from util.demo_sansa import format_prompt'
+    """
+    assert prompt_type in ['mask', 'point', 'box']
+    prompt_dict = {0: {}, 'shots': n_shots}
+    prompt_d = prompt_input
+    if prompt_type in ['point']:
+        pts = torch.as_tensor(prompt_input, dtype=torch.float32, device=device).view(-1, 2)
+        prompt_d = {'point_coords': pts.view(1, -1, 2),
+                    'point_labels': torch.ones(1, pts.shape[0], dtype=torch.int32, device=device)}
+    elif prompt_type == 'box':
+        b = torch.as_tensor(prompt_input, dtype=torch.float32, device=device).view(-1, 4)
+        x0y0 = torch.minimum(b[:, :2], b[:, 2:])
+        x1y1 = torch.maximum(b[:, :2], b[:, 2:])
+        point_coords = torch.stack([x0y0, x1y1], dim=1).view(1, -1, 2)
+        n = point_coords.shape[1] // 2
+        point_labels = torch.tensor([2, 3], dtype=torch.int32, device=device).repeat(1, n)
+        prompt_d = {'point_coords': point_coords, 'point_labels': point_labels}
+    prompt_dict[0][0] = {'prompt_type': prompt_type, 'prompt': prompt_d}
+    return prompt_dict
+```
+</details> 
 
 
+```python
+import torch
+from torchvision import transforms 
+import torchvision.transforms.functional as TF
+from PIL import Image
+import numpy as np
+
+sup_img_path='assets/demo/images_demo/image011.jpg'
+q_img_path='assets/demo/images_demo/image005.jpg'
+sup_mask_path = 'assets/demo/masks_demo/image011_dog.png'
+
+device = torch.device('cuda')
+_transform = transforms.Compose([transforms.Resize(size=(640, 640)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+sup_t, q_t = _transform(Image.open(sup_img_path)), _transform(Image.open(q_img_path))
+video = torch.stack([sup_t, q_t], dim=0)[None].to(device)      # [1, 2, 3, H, W]
+
+model = torch.hub.load('ClaudiaCuttano/SANSA', 'sansa', pretrained=True, trust_repo=True, device=device)
+
+point = np.array([[320, 330]], dtype=np.float32)  # points
+#box = np.array([300, 560, 440, 320], dtype=np.float32)  # box
+#mask = TF.to_tensor(Image.open(sup_mask_path).convert("L").resize((img_size, img_size), Image.NEAREST))[None].to(device) # mask
+
+point_prompt = format_prompt(n_shots=1, prompt_input=point, prompt_type='point', device=device)
+#box_prompt = format_prompt(n_shots=1, prompt_input=box, prompt_type='box', device=device)
+#mask_prompt = format_prompt(n_shots=1, prompt_input=mask, prompt_type='mask', device=device)
+
+with torch.no_grad():
+    out = model(video, point_prompt) # choose one between [point_prompt, box_prompt, mask_prompt]
+pred_mask = out["pred_masks"][1].sigmoid() > 0.5
+```
+---
 ## 2. Paper Results & Training 📘  
 _Reproduce benchmarks (strict few-shot & in-context segmentation) and training._
 ## 📊 Data Preparation
@@ -108,7 +173,7 @@ SANSA/
 > **· Purpose.** Exact checkpoints and commands to match the paper numbers.  
 > **· Tracks.** (1) Strict few-shot segmentation · (2) Generalist in-context segmentation.  
 > **· Note.** Models in this section supports masks prompts-only, to ensure fair comparison with prior works.  
-> **· Tip.** If you just want one versatile and promptable model for your own data, use **[SANSA Universal Model]((#1-sansa-universal-model-))** above.
+> **· Tip.** If you just want one versatile and promptable model for your own data, use [**SANSA Universal Model**](#1-sansa-universal-model-) above.
 > 
 
 ### (1) Strict Few-Shot Segmentation
@@ -118,8 +183,8 @@ Reference objects are given as **masks**.
 
 |        Dataset         |    Pretrained <br/>adapters     | Fold<br/>0 | Fold<br/>1 | Fold<br/>2 | Fold<br/>3 | Fold<br/>4 | Fold<br/>5 | Fold<br/>6 | Fold<br/>7 | Fold<br/>8 | Fold<br/>9 | **Mean<br/>IoU** |
 |:----------------------:|:-------------------------------:|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|:----------------:|
-|**LVIS-92<sup>i</sup>** | [📥 LVIS (10)](https://drive.google.com/file/d/1wOaHVd-QaZHVKiNSe2aNSS6el1usxcil/) |    50.1    |    47.8    |    51.4    |    51.6    |    46.9    |    49.1    |    51.2    |    51.6    |    48.8    |    47.4    |     **49.6**     |
-|      **COCO-20<sup>i</sup>**       | [📥 COCO (4)](https://drive.google.com/file/d/1nAHFgd9VPMN-XGrG0NEkbzkClddA0Ygf/)  |    57.7    |    61.7    |    62.8    |    58.5    |            |            |            |            |            |            |     **60.2**     |
+|**LVIS-92<sup>i</sup>** | [📥 LVIS (10)](https://drive.google.com/file/d/1Ym_jcIfvAwQUOG-9jiIH_B8iAyJT6Q0L/) |    48.4    |    48.3    |    51.5    |    50.7    |    44.8    |    50.1    |    51.1    |    50.5    |    45.9    |    46.3    |     **48.8**     |
+|      **COCO-20<sup>i</sup>**       | [📥 COCO (4)](https://drive.google.com/file/d/1OEWDRqYhRgrXO5RfTuwk_MnnQ8mJApbW/)  |    58.9    |    62.6    |    61.5    |    58.0    |            |            |            |            |            |            |     **60.2**     |
 |      **FSS-1000**      |  [📥 FSS-1000](https://drive.google.com/file/d/1Y_W3cL-qxK-J5-yCJk1fXBwNwrhod5RS/)  |    91.4    |            |            |            |            |            |            |            |            |            |     **91.4**     |
 
 
@@ -141,13 +206,13 @@ python inference_fss.py \
 Single **generalist** adapter trained on **COCO+ADE20K+LVIS+PACO** for **in-context few-shot segmentation**: one model across datasets and tasks (**object** + **part** segmentation). 
 Reference objects are given as **masks**.
 
-Note: if you want a single generalist **promptable** model,  please refer to [**SANSA Universal Model**](#-use-sansa-on-your-own-data).
+Note: if you want a single generalist **promptable** model,  please refer to [**SANSA Universal Model**](#1-sansa-universal-model-).
 
 
 |                                          **Pretrained adapters**                                          |    **Segmentation**     |    **Segmentation**     | **Segmentation** |    **Part**     |   **Part**    |
 |:---------------------------------------------------------------------------------------------------------:|:-----------------------:|:-----------------------:|:----------------:|:---------------:|:-------------:|
 |                                                                                                           | **LVIS-92<sup>i</sup>** | **COCO-20<sup>i</sup>** |   **FSS-1000**   | **Pascal-Part** | **PACO-Part** |
-|      [📥 In-Context Generalist](https://drive.google.com/file/d/17PktKkF1wibJeEW5CIxPoL7bjKLevfXW/)       |        **52.9**         |        **74.8**         |     **90.0**     |    **51.4**     |   **45.5**    |
+|      [📥 In-Context Generalist](https://drive.google.com/file/d/1ks88lD2exj6GhtCVEK6aatvd1Pq2BBZq/)       |        **50.3**         |        **75.6**         |     **90.0**     |    **49.1**     |   **43.0**    |
 
 
 **Command to replicate the results:**
@@ -238,3 +303,4 @@ This project builds upon code from the following libraries and repositories:
 
 - [Segment Anything 2](https://github.com/facebookresearch/sam2)
 - [AdaptFormer](https://github.com/ShoufaChen/AdaptFormer)
+

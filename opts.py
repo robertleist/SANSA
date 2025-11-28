@@ -19,7 +19,7 @@ def get_args_parser() -> argparse.ArgumentParser:
                  "lung", "ade20k", "multi"], help="Dataset name. Use 'multi' for training the generalist model.")
     parser.add_argument("--multi_train", nargs="+", type=str, default=["lvis", "coco", "ade20k", "paco_part"], help="Datasets to mix when dataset_file='multi'.")
     parser.add_argument("--ds_weight", nargs="+", type=float, default=[0.4, 0.45, 0.1, 0.05], help="Sampling weights for datasets in --multi_train.")
-    parser.add_argument("--num_workers", type=int, default=6, help="DataLoader workers.")
+    parser.add_argument("--num_workers", type=int, default=0, help="DataLoader workers.")
 
     # Prompting / Shots / Folds
     parser.add_argument("--prompt", type=str, default="mask", choices=["mask", "scribble", "box", "point", "multi"], help="Prompt type for support frames; 'multi' samples a type at random.")
