@@ -48,7 +48,12 @@ def eval_instance(model: torch.nn.Module, args) -> float:
 
     # 1. Setup Dataset
     ds = build_fsis_dataset(args.dataset_file, image_set='val', args=args)
-    dataloader = DataLoader(ds, batch_size=1, shuffle=False, num_workers=args.num_workers)
+    dataloader = DataLoader(
+        ds,
+        batch_size=1,
+        shuffle=False,
+        num_workers=args.num_workers
+    )
 
     model.eval()
     results = []  # To store LVIS-style detections
@@ -82,15 +87,15 @@ def eval_instance(model: torch.nn.Module, args) -> float:
 
         # 2. Convert Predictions to LVIS Format
         for i in range(len(preds)):
-            mask = (preds[i].sigmoid() > 0.5).cpu().numpy().astype(np.uint8)
+            mask = (preds[i].sigmoid() > 0.5).squeeze().cpu().numpy().astype(np.uint8)
 
             # Convert binary mask to COCO/LVIS RLE format
             rle = mask_util.encode(np.array(mask[:, :, None], order="F", dtype="uint8"))[0]
             rle["counts"] = rle["counts"].decode("utf-8")
 
             results.append({
-                "image_id": int(img_id),
-                "category_id": int(cat_id),
+                "image_id": int(img_id[0]),
+                "category_id": int(cat_id[0]),
                 "segmentation": rle,
                 "score": float(scores[i])
             })

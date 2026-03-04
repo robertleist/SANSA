@@ -89,6 +89,7 @@ class DatasetLVIS(Dataset):
             'instances': torch.stack(processed_instances) if processed_instances else torch.empty(0),
             'category_id': cat_id,
             'img_name': img_name,
+            'img_id': int((img_name.split('.')[0]).split('/')[-1]),  # get the image id from the name
             'org_size': org_size
         }
 

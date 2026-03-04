@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple, Any
 import einops
 from torch import Tensor
 
+
 class DDPWrapper:
     def __init__(self, ddp_module: Any) -> None:
         self.ddp_module: Any = ddp_module
@@ -34,6 +35,7 @@ class DDPWrapper:
             f"'{type(self).__name__}' object has no attribute '{name}'"
         )
 
+
 @dataclass
 class DecoderOutput:
     """
@@ -45,6 +47,7 @@ class DecoderOutput:
     obj_ptr: Optional[Tensor] = None
     pix_feat_with_mem: Optional[Tensor] = None
     masks: Optional[Tensor] = None
+    ious: Optional[Tensor] = None
 
     def __post_init__(self):
         self.masks = self.low_res_masks
@@ -52,14 +55,15 @@ class DecoderOutput:
     def move_to_cpu(self) -> "DecoderOutput":
         """Safely move all present tensors to CPU and return self."""
         for field in (
-            "low_res_masks",
-            "high_res_masks",
-            "obj_ptr",
-            "object_score_logits",
-            "hyper_in",
-            "object_score",
-            "masks",
-            "pix_feat_with_mem",
+                "low_res_masks",
+                "high_res_masks",
+                "obj_ptr",
+                "object_score_logits",
+                "hyper_in",
+                "object_score",
+                "masks",
+                "ious",
+                "pix_feat_with_mem",
         ):
             val = getattr(self, field)
             if val is not None:
@@ -112,7 +116,6 @@ class BackboneOutput:
         vision_feats_16 = einops.rearrange(vision_feats_16, '(h w) b c -> b c h w', h=self.feat_sizes[-1][0])
         return vision_feats_16
 
-
     def get_high_res_features(self, current_vision_feats: List[Tensor]) -> List[Tensor]:
         """
         Reformat high-resolution backbone features for the decoder.
@@ -127,8 +130,8 @@ class BackboneOutput:
         high_res = []
         for x, s in zip(current_vision_feats[:-1], self.feat_sizes[:-1]):
             # x is typically [C, 1, HW] -> permute to [1, HW, C], then view to [1, C, H, W]
-            x_perm = x.permute(1, 2, 0).contiguous()            # [1, HW, C]
-            x_bchw = x_perm.view(x.size(1), x.size(2), *s)      # [1, C, H, W]
+            x_perm = x.permute(1, 2, 0).contiguous()  # [1, HW, C]
+            x_bchw = x_perm.view(x.size(1), x.size(2), *s)  # [1, C, H, W]
             high_res.append(x_bchw)
         return high_res
 

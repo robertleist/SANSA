@@ -375,10 +375,11 @@ class SAM2Base(torch.nn.Module):
         )
 
         sam_output_token = sam_output_tokens[:, 0]
+        best_iou_inds = torch.argmax(ious, dim=-1)
+        batch_inds = torch.arange(B, device=device)
+
         if multimask_output:
             # take the best mask prediction (with the highest IoU estimation)
-            best_iou_inds = torch.argmax(ious, dim=-1)
-            batch_inds = torch.arange(B, device=device)
             low_res_masks = low_res_multimasks[batch_inds, best_iou_inds].unsqueeze(1)
             high_res_masks = high_res_multimasks[batch_inds, best_iou_inds].unsqueeze(1)
             if sam_output_tokens.size(1) > 1:
@@ -405,7 +406,8 @@ class SAM2Base(torch.nn.Module):
             low_res_masks,
             high_res_masks,
             obj_ptr,
-            backbone_features
+            backbone_features,
+            ious=ious[batch_inds, best_iou_inds],
         )
         return out
 

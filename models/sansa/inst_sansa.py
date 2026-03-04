@@ -235,16 +235,17 @@ class InstanceSANSA(nn.Module):
                         memory_idx=i,
                         memory_bank=self.memory_bank
                     )
-
+                score = decoder_out.ious
                 # Stop if the 'objectness' score is too low
-                if decoder_out.obj_ptr.max() < stopping_threshold:
+                if score < stopping_threshold:
                     break
 
                 # Update memory so the NEXT iteration knows what is already segmented
                 mem_entry = self._compute_memory_bank_dict(decoder_out, backbone_output, idx=0)
                 self.memory_bank[i] = mem_entry
+
                 outputs["masks"].append(decoder_out.masks[0])
-                outputs["scores"].append(decoder_out.obj_ptr[0])
+                outputs["scores"].append(score)
                 i += 1
             batch_output.append(outputs)
         return batch_output

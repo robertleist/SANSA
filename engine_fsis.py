@@ -33,6 +33,8 @@ def train_one_epoch(
     print_freq = 1
 
     for i, batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+        if i > 1:
+            break
         global_step = epoch * len(data_loader) + i
         # 1. Unpack LVIS Batch
         # images: [B, C, H, W], instances_batch: [B, N_instances, H, W]
