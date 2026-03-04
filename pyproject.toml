@@ -1,0 +1,11 @@
+[project]
+name = "sansa"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "lvis>=0.5.3",
+    "mlflow>=3.10.0",
+    "pycocotools>=2.0.11",
+    "scipy-stubs~=1.15.3",
+]
