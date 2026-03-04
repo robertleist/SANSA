@@ -8,8 +8,8 @@ import einops
 
 from util.commons import rescale_points, resize_mask
 
-
 PROMPT_CHOICES = ('mask', 'point', 'scribble', 'box')
+
 
 def select_prompt(prompt: str) -> str:
     """
@@ -24,39 +24,74 @@ def select_prompt(prompt: str) -> str:
     return prompt
 
 
-def build_prompt_dict(masks: torch.Tensor, prompt_type: str, n_shots: int, train_mode: bool, device: torch.device):
-    B = masks.shape[0]
-    prompt_dict = {'shots': n_shots}
+def build_prompt_dict(masks: tuple | torch.Tensor, prompt_type: str, n_shots: int, train_mode: bool,
+                      device: torch.device):
+    B = len(masks)
+    prompt_dict = {}
 
     for batch_idx in range(B):
         prompt_dict[batch_idx] = {}
         for support_idx in range(n_shots):
-            prompt_dict[batch_idx][support_idx] = {}    
-            
+            prompt_dict[batch_idx][support_idx] = {}
+
             prompt = select_prompt(prompt_type)
-            gt_mask = masks[batch_idx:batch_idx+1, support_idx:support_idx+1]
+            gt_mask = masks[batch_idx][support_idx:support_idx + 1]
             prompt_dict[batch_idx][support_idx]['prompt_type'] = prompt
             if prompt in ("point", "scribble", "box"):
                 prompt_inputs = build_prompt_inputs(gt_mask, prompt, train_mode, device)
-            else: # use mask
+            else:  # use mask
+                while gt_mask.ndim < 4:
+                    # Assert [1, N, H, W]
+                    gt_mask = gt_mask.unsqueeze(0)
                 prompt_inputs = gt_mask.to(device)
             prompt_dict[batch_idx][support_idx]['prompt'] = prompt_inputs
-    
+
     return prompt_dict
 
 
-def rescale_prompt(frame_prompt, prompt_type:str, orig_scale: Tuple[int, int], dest_scale: int):
+def build_prompt_dict_fsis(
+        masks: tuple | torch.Tensor,
+        prompt_type: str,
+        num_support_prompts: int,
+        train_mode: bool,
+        device: torch.device
+):
+    B = len(masks)
+    prompt_dict = {}
+
+    for batch_idx in range(B):
+        prompt_dict[batch_idx] = {}
+        for support_idx in range(num_support_prompts):
+            prompt_dict[batch_idx][support_idx] = {}
+
+            prompt = select_prompt(prompt_type)
+            gt_mask = masks[batch_idx][support_idx:support_idx + 1]
+            prompt_dict[batch_idx][support_idx]['prompt_type'] = prompt
+            if prompt in ("point", "scribble", "box"):
+                prompt_inputs = build_prompt_inputs(gt_mask, prompt, train_mode, device)
+            else:  # use mask
+                while gt_mask.ndim < 4:
+                    # Assert [1, N, H, W]
+                    gt_mask = gt_mask.unsqueeze(0)
+                prompt_inputs = gt_mask.to(device)
+            prompt_dict[batch_idx][support_idx]['prompt'] = prompt_inputs
+    return prompt_dict
+
+
+def rescale_prompt(frame_prompt, prompt_type: str, orig_scale: Tuple[int, int], dest_scale: int):
     if prompt_type in ['point', 'box', 'scribble']:
-        frame_prompt['point_coords'] = rescale_points(frame_prompt['point_coords'], orig_scale, (dest_scale, dest_scale))
+        frame_prompt['point_coords'] = rescale_points(frame_prompt['point_coords'], orig_scale,
+                                                      (dest_scale, dest_scale))
     elif prompt_type == 'mask':
         frame_prompt = resize_mask(frame_prompt, dest_scale)
     else:
         raise NotImplementedError()
-    
+
     return frame_prompt
 
 
-def build_prompt_inputs(frame_gt: torch.Tensor, prompt: str, training: bool, device: torch.device) -> Dict[str, torch.Tensor]:
+def build_prompt_inputs(frame_gt: torch.Tensor, prompt: str, training: bool, device: torch.device) -> Dict[
+    str, torch.Tensor]:
     """
     Build prompt inputs (points/scribble/box) from a binary GT mask at image size.
 
@@ -163,7 +198,7 @@ def get_point_mask(mask, training, max_points=20):
     else:
         num_points = max_points
 
-    view_mask = mask[0,0].view(-1)
+    view_mask = mask[0, 0].view(-1)
     non_zero_idx = view_mask.nonzero()[:, 0]  # get non-zero index of mask
     selected_idx = torch.randperm(len(non_zero_idx))[:num_points]  # select id
     non_zero_idx = non_zero_idx[selected_idx]  # select non-zero index
@@ -190,10 +225,10 @@ def get_scribble_mask(mask, training, stroke_preset=['rand_curve', 'rand_curve_s
         nStroke = random.Random(321).randint(1, min(20, mask.sum().item()))
     preset = get_stroke_preset(stroke_preset_name)
 
-    points = get_random_points_from_mask(mask[0,0].bool(), n=nStroke)
+    points = get_random_points_from_mask(mask[0, 0].bool(), n=nStroke)
     rand_mask = get_mask_by_input_strokes(init_points=points, imageWidth=w, imageHeight=h,
-                                              nStroke=min(nStroke, len(points)), **preset)
-    rand_mask = (~torch.from_numpy(rand_mask)) * mask[0,0].bool().cpu()
+                                          nStroke=min(nStroke, len(points)), **preset)
+    rand_mask = (~torch.from_numpy(rand_mask)) * mask[0, 0].bool().cpu()
     rand_mask = rand_mask.float().unsqueeze(0).unsqueeze(0)
     return rand_mask.to(mask.device)
 
@@ -204,32 +239,32 @@ def get_scribble_mask(mask, training, stroke_preset=['rand_curve', 'rand_curve_s
 # ---------
 
 def get_stroke_preset(stroke_preset):
-        if stroke_preset == 'rand_curve':
-            return {
-                "nVertexBound": [10, 30],
-                "maxHeadSpeed": 20,
-                "maxHeadAcceleration": (15, 0.5),
-                "brushWidthBound": (3, 10),
-                "nMovePointRatio": 0.5,
-                "maxPiontMove": 3,
-                "maxLineAcceleration": (5, 0.5),
-                "boarderGap": None,
-                "maxInitSpeed": 6
-            }
-        elif stroke_preset == 'rand_curve_small':
-            return {
-                "nVertexBound": [6, 22],
-                "maxHeadSpeed": 12,
-                "maxHeadAcceleration": (8, 0.5),
-                "brushWidthBound": (2.5, 5),
-                "nMovePointRatio": 0.5,
-                "maxPiontMove": 1.5,
-                "maxLineAcceleration": (3, 0.5),
-                "boarderGap": None,
-                "maxInitSpeed": 3
-            }
-        else:
-            raise NotImplementedError(f'The stroke presetting "{stroke_preset}" does not exist.')
+    if stroke_preset == 'rand_curve':
+        return {
+            "nVertexBound": [10, 30],
+            "maxHeadSpeed": 20,
+            "maxHeadAcceleration": (15, 0.5),
+            "brushWidthBound": (3, 10),
+            "nMovePointRatio": 0.5,
+            "maxPiontMove": 3,
+            "maxLineAcceleration": (5, 0.5),
+            "boarderGap": None,
+            "maxInitSpeed": 6
+        }
+    elif stroke_preset == 'rand_curve_small':
+        return {
+            "nVertexBound": [6, 22],
+            "maxHeadSpeed": 12,
+            "maxHeadAcceleration": (8, 0.5),
+            "brushWidthBound": (2.5, 5),
+            "nMovePointRatio": 0.5,
+            "maxPiontMove": 1.5,
+            "maxLineAcceleration": (3, 0.5),
+            "boarderGap": None,
+            "maxInitSpeed": 3
+        }
+    else:
+        raise NotImplementedError(f'The stroke presetting "{stroke_preset}" does not exist.')
 
 
 def get_random_points_from_mask(mask, n=5):
@@ -245,10 +280,10 @@ def get_random_points_from_mask(mask, n=5):
 
 
 def get_mask_by_input_strokes(
-    init_points, imageWidth=320, imageHeight=180, nStroke=5,
-    nVertexBound=[10, 30], maxHeadSpeed=15, maxHeadAcceleration=(15, 0.5),
-    brushWidthBound=(5, 20), boarderGap=None, nMovePointRatio=0.5, maxPiontMove=10,
-    maxLineAcceleration=5, maxInitSpeed=5
+        init_points, imageWidth=320, imageHeight=180, nStroke=5,
+        nVertexBound=[10, 30], maxHeadSpeed=15, maxHeadAcceleration=(15, 0.5),
+        brushWidthBound=(5, 20), boarderGap=None, nMovePointRatio=0.5, maxPiontMove=10,
+        maxLineAcceleration=5, maxInitSpeed=5
 ):
     '''
     Get video masks by random strokes which move randomly between each
@@ -372,11 +407,12 @@ def draw_mask_by_control_points(mask, Xs, Ys, brushWidth, fill=255):
         draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=fill)
     return mask
 
+
 def get_random_stroke_control_points(
-    init_point,
-    imageWidth, imageHeight,
-    nVertexBound=(10, 30), maxHeadSpeed=10, maxHeadAcceleration=(5, 0.5), boarderGap=20,
-    maxInitSpeed=10
+        init_point,
+        imageWidth, imageHeight,
+        nVertexBound=(10, 30), maxHeadSpeed=10, maxHeadAcceleration=(5, 0.5), boarderGap=20,
+        maxInitSpeed=10
 ):
     '''
     Implementation the free-form training masks generating algorithm
