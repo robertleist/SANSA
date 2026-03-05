@@ -235,7 +235,7 @@ class InstanceSANSA(nn.Module):
                         memory_idx=i,
                         memory_bank=self.memory_bank
                     )
-                score = decoder_out.ious
+                score = torch.sigmoid(decoder_out.object_score_logits)
                 # Stop if the 'objectness' score is too low
                 if score < stopping_threshold:
                     break
@@ -247,7 +247,12 @@ class InstanceSANSA(nn.Module):
                 outputs["masks"].append(decoder_out.masks[0])
                 outputs["scores"].append(score)
                 i += 1
-            batch_output.append(outputs)
+            batch_output.append(
+                {
+                    "masks": torch.stack(outputs["masks"], 1).squeeze(),
+                    "scores": torch.stack(outputs["scores"], 1).squeeze(),
+                }
+            )
         return batch_output
 
 

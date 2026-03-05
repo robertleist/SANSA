@@ -48,6 +48,7 @@ class DecoderOutput:
     pix_feat_with_mem: Optional[Tensor] = None
     masks: Optional[Tensor] = None
     ious: Optional[Tensor] = None
+    object_score_logits: Optional[Tensor] = None
 
     def __post_init__(self):
         self.masks = self.low_res_masks

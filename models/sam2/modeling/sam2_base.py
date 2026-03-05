@@ -408,6 +408,7 @@ class SAM2Base(torch.nn.Module):
             obj_ptr,
             backbone_features,
             ious=ious[batch_inds, best_iou_inds],
+            object_score_logits=object_score_logits,
         )
         return out
 

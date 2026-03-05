@@ -67,14 +67,12 @@ def train_one_epoch(
             gt_instances = instances_batch[b].to(device)  # [N_gt, H, W]
             og_size = og_sizes[b]
 
-            # Resize predictions; must be resized like this because num of instances can vary per image
-            preds = [
-                F.interpolate(
-                    pred.unsqueeze(0),
-                    og_size,
-                    mode='bilinear',
-                ).squeeze() for pred in preds
-            ]
+            # Resize predictions
+            preds = F.interpolate(
+                preds.unsqueeze(1),
+                og_size,
+                mode='bilinear',
+            ).squeeze(1)
 
             if len(preds) == 0 or len(gt_instances) == 0:
                 continue

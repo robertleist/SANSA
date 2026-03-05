@@ -2,11 +2,9 @@ import argparse
 from os.path import join
 
 import mlflow
-import numpy as np
 import torch
-import lvis
-from pycocotools import mask as mask_util
 from torch.utils.data import DataLoader
+from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from tqdm import tqdm
 
 import opts
@@ -39,86 +37,92 @@ def main(args: argparse.Namespace) -> float:
     print(f"number of params: {n_parameters}")
     print('Start inference')
 
-    mIoU = eval_instance(model, args)
-    return mIoU
+    mAP = eval_instance(model, args)
+    return mAP
 
 
 def eval_instance(model: torch.nn.Module, args) -> float:
-    print(f'Evaluating LVIS Instance mAP')
+    print(f'Evaluating mAP on {args.device}...')
 
-    # 1. Setup Dataset
+    # 1. Setup Dataset & Metric
     ds = build_fsis_dataset(args.dataset_file, image_set='val', args=args)
-    dataloader = DataLoader(
-        ds,
-        batch_size=1,
-        shuffle=False,
-        num_workers=args.num_workers
-    )
+    dataloader = DataLoader(ds, batch_size=1, shuffle=False, num_workers=args.num_workers)
+
+    # Initialize TorchMetrics mAP (iou_type='segm' equivalent)
+    # We set 'masks=True' to compute Average Precision for segmentations
+    metric = MeanAveragePrecision(
+        iou_type="segm",
+        #backend="faster_coco_eval"
+    ).to(args.device)
 
     model.eval()
-    results = []  # To store LVIS-style detections
+    counter = 0
 
     for batch in tqdm(dataloader, desc='Running Inference'):
         image_batch = batch['image'].to(args.device)
-        instances_batch = batch['instances']
-        cat_id = batch['category_id']  # From our revised Dataset class
-        img_id = batch['img_id']  # Ensure your dataset returns the LVIS image_id
+        instances_batch = [inst.to(args.device) for inst in batch['instances']]  # GT Masks
+        cat_ids = batch['category_id'].to(args.device)  # GT Category
+
+        if counter > 3:  # Keep your debug break
+            break
+        counter += 1
 
         with torch.no_grad():
-            # Run the recursive SANSA loop
-            # max_iterations should be high enough to catch most objects (e.g., 100 for LVIS)
             prompt_dict = build_prompt_dict_fsis(
                 masks=instances_batch,
                 prompt_type=args.prompt,
                 num_support_prompts=args.shots,
                 train_mode=False,
-                device=model.device,
+                device=args.device,
             )
+
             max_instances = max(len(instances) for instances in instances_batch)
             outputs = model(
                 image_batch,
                 prompt_dict,
                 max_iterations=int(1.5 * max_instances),
-                # Let the model run at most 1.5 times the amount of actual instances
             )
 
-        preds = outputs[0]["masks"]  # [N, H, W] logits
-        scores = outputs[0]["scores"]  # [N] confidence values
+        # 2. Prepare Predictions for Metric
+        # Logic: Convert logits to binary masks [N, H, W]
+        pred_masks = (outputs[0]["masks"].sigmoid() > 0.5).bool()
+        pred_scores = outputs[0]["scores"]
+        # In LVIS eval, every pred for a sample usually shares the image's category_id
+        # based on your previous script's logic
+        pred_labels = torch.full((pred_masks.shape[0],), int(cat_ids[0]), device=args.device)
 
-        # 2. Convert Predictions to LVIS Format
-        for i in range(len(preds)):
-            mask = (preds[i].sigmoid() > 0.5).squeeze().cpu().numpy().astype(np.uint8)
+        preds = [
+            dict(
+                masks=pred_masks.squeeze(),
+                scores=pred_scores.squeeze(),
+                labels=pred_labels,
+            )
+        ]
 
-            # Convert binary mask to COCO/LVIS RLE format
-            rle = mask_util.encode(np.array(mask[:, :, None], order="F", dtype="uint8"))[0]
-            rle["counts"] = rle["counts"].decode("utf-8")
+        # 3. Prepare Ground Truth for Metric
+        # Flatten the list of instances from the batch
+        gt_masks = torch.stack(instances_batch, 0).squeeze()
+        gt_labels = torch.full((gt_masks.shape[0],), int(cat_ids[0]), device=args.device)
 
-            results.append({
-                "image_id": int(img_id[0]),
-                "category_id": int(cat_id[0]),
-                "segmentation": rle,
-                "score": float(scores[i])
-            })
+        target = [
+            dict(
+                masks=gt_masks.bool(),
+                labels=gt_labels,
+            )
+        ]
 
-    # 3. Run LVIS Evaluation
-    if len(results) == 0:
-        print("No predictions made.")
-        return 0.0
+        # 4. Update Metric on GPU
+        metric.update(preds, target)
 
-    # Load the ground truth annotations
-    lvis_gt = lvis.LVIS(args.anno_path)
-    lvis_dt = lvis.LVISResults(
-        lvis_gt,
-        results,
-    )
+    # 5. Compute Final Results
+    results = metric.compute()
 
-    lvis_eval = lvis.LVISEval(lvis_gt, lvis_dt, iou_type='segm')
-    lvis_eval.evaluate()
-    lvis_eval.accumulate()
-    lvis_eval.summarize()
+    print(f"\nEvaluation Results:")
+    print(f"mAP: {results['map']:.4f}")
+    print(f"mAP_50: {results['map_50']:.4f}")
+    print(f"mAP_75: {results['map_75']:.4f}")
 
-    # Return the main mAP metric (AP @ IoU=0.5:0.95)
-    return lvis_eval.stats['AP']
+    return float(results['map'])
 
 
 if __name__ == '__main__':

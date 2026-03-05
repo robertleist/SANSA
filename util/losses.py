@@ -219,7 +219,7 @@ def loss_instances(
             target = torch.zeros_like(p_scores)
 
             # We typically weight FP loss lower so the model isn't too afraid to predict
-            fp_loss = F.binary_cross_entropy_with_logits(p_scores, target) * fp_factor
+            fp_loss = F.binary_cross_entropy(p_scores, target) * fp_factor
             total_loss += fp_loss
             metrics["loss_fp"] += fp_loss.detach().item()
 
@@ -232,7 +232,7 @@ def loss_instances(
         # Take the last score and apply a loss which scales with the amount of instances missed.
         last_score = scores[-1]
         target = torch.ones_like(last_score)
-        fn_loss = F.binary_cross_entropy_with_logits(last_score, target) * fn_factor
+        fn_loss = F.binary_cross_entropy(last_score, target) * fn_factor
         total_loss += fn_loss
         metrics["loss_fn"] += fn_loss.detach().item()
 
