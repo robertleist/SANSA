@@ -214,12 +214,14 @@ def loss_instances(
     # Goal: Force "ghost" predictions to become empty backgrounds (all zeros)
     if len(FP_indices) > 0:
         for p_idx in FP_indices:
+            # Preds are towards 1
             p_scores = scores[p_idx]
-            # Target is an all-zero mask
+
+            # But target should be 0
             target = torch.zeros_like(p_scores)
 
             # We typically weight FP loss lower so the model isn't too afraid to predict
-            fp_loss = F.binary_cross_entropy(p_scores, target) * fp_factor
+            fp_loss = F.binary_cross_entropy(p_scores, target) * fp_factor / len(FP_indices)
             total_loss += fp_loss
             metrics["loss_fp"] += fp_loss.detach().item()
 

@@ -13,7 +13,7 @@ from models.sansa.sansa import build_sansa
 from util.commons import make_deterministic, setup_logging, resume_from_checkpoint
 from util.promptable_utils import build_prompt_dict_fsis
 
-mlflow.set_tracking_uri("http://127.0.0.1:5000")
+mlflow.set_tracking_uri("http://172.16.3.188:5000")
 
 
 def main(args: argparse.Namespace) -> float:
@@ -41,7 +41,7 @@ def main(args: argparse.Namespace) -> float:
     return mAP
 
 
-def eval_instance(model: torch.nn.Module, args) -> float:
+def eval_instance(model: torch.nn.Module, args) -> dict:
     print(f'Evaluating mAP on {args.device}...')
 
     # 1. Setup Dataset & Metric
@@ -56,16 +56,11 @@ def eval_instance(model: torch.nn.Module, args) -> float:
     ).to(args.device)
 
     model.eval()
-    counter = 0
 
     for batch in tqdm(dataloader, desc='Running Inference'):
         image_batch = batch['image'].to(args.device)
         instances_batch = [inst.to(args.device) for inst in batch['instances']]  # GT Masks
         cat_ids = batch['category_id'].to(args.device)  # GT Category
-
-        if counter > 3:  # Keep your debug break
-            break
-        counter += 1
 
         with torch.no_grad():
             prompt_dict = build_prompt_dict_fsis(
@@ -122,7 +117,7 @@ def eval_instance(model: torch.nn.Module, args) -> float:
     print(f"mAP_50: {results['map_50']:.4f}")
     print(f"mAP_75: {results['map_75']:.4f}")
 
-    return float(results['map'])
+    return results
 
 
 if __name__ == '__main__':

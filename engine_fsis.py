@@ -33,8 +33,6 @@ def train_one_epoch(
     print_freq = 1
 
     for i, batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-        if i > 1:
-            break
         global_step = epoch * len(data_loader) + i
         # 1. Unpack LVIS Batch
         # images: [B, C, H, W], instances_batch: [B, N_instances, H, W]
@@ -91,7 +89,11 @@ def train_one_epoch(
             sys.exit(1)
 
         optimizer.zero_grad(set_to_none=True)
-        batch_loss.backward()
+        if batch_loss.requires_grad:
+            batch_loss.backward()
+            optimizer.step()
+        else:
+            print("Skipping backward: No gradients to compute for this batch.")
 
         grad_total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
         optimizer.step()

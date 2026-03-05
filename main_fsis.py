@@ -18,7 +18,7 @@ import mlflow
 from util.commons import setup_logging, make_deterministic
 
 
-mlflow.set_tracking_uri("http://127.0.0.1:5000")
+mlflow.set_tracking_uri("http://172.16.3.188:5000")
 
 
 def main(args):
@@ -112,7 +112,8 @@ def main(args):
                 }, checkpoint_path)
 
             print(f"Start validation")
-            eval_instance(model, args)
+            eval_stats = eval_instance(model, args)
+            mlflow.log_metrics(eval_stats, step=epoch)
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      'epoch': epoch,
