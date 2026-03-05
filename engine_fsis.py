@@ -28,6 +28,7 @@ def train_one_epoch(
         args: Optional[object] = None,
 ) -> dict:
     model.train()
+    rank = utils.get_rank()
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 1
@@ -91,12 +92,12 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
         if batch_loss.requires_grad:
             batch_loss.backward()
+
+            grad_total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
             optimizer.step()
         else:
+            grad_total_norm = torch.tensor(0.0, device=device)
             print("Skipping backward: No gradients to compute for this batch.")
-
-        grad_total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-        optimizer.step()
 
         if lr_scheduler is not None:
             lr_scheduler.step()
@@ -108,15 +109,8 @@ def train_one_epoch(
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(grad_norm=grad_total_norm)
 
-        if i % print_freq == 0:
-            # Log primary loss and learning rate
-            mlflow.log_metric("iter_loss", batch_loss.item(), step=global_step)
-            mlflow.log_metric("lr", optimizer.param_groups[0]["lr"], step=global_step)
-            mlflow.log_metric("grad_norm", grad_total_norm, step=global_step)
-            # Log dynamic metrics (Dice, BCE, etc.)
-            for k, v in avg_metrics.items():
-                mlflow.log_metric(f"iter_{k}", v, step=global_step)
-
     metric_logger.synchronize_between_processes()
+    for k, v in metric_logger.meters.items():
+        mlflow.log_metric(f"train_{k}", v.value, step=epoch)
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
