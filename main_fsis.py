@@ -16,9 +16,10 @@ from engine_fsis import train_one_epoch
 import opts
 import mlflow
 from util.commons import setup_logging, make_deterministic
+from util.path_utils import MLFLOW_URL
 
 
-mlflow.set_tracking_uri("http://172.16.3.188:5000")
+mlflow.set_tracking_uri(MLFLOW_URL)
 
 
 def main(args):

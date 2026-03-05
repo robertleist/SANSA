@@ -11,9 +11,10 @@ import opts
 from datasets_fsis import build_fsis_dataset
 from models.sansa.sansa import build_sansa
 from util.commons import make_deterministic, setup_logging, resume_from_checkpoint
+from util.path_utils import MLFLOW_URL
 from util.promptable_utils import build_prompt_dict_fsis
 
-mlflow.set_tracking_uri("http://172.16.3.188:5000")
+mlflow.set_tracking_uri(MLFLOW_URL)
 
 
 def main(args: argparse.Namespace) -> float:

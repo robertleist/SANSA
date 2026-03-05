@@ -1,3 +1,7 @@
+import os
+
+
+MLFLOW_URL = os.getenv('MLFLOW_URL', 'http://localhost:5000')
 SAM2_WEIGHTS_URL = {
     'tiny':  'https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt',
     'base':  'https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_base_plus.pt',
