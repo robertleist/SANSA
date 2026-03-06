@@ -249,6 +249,4 @@ def loss_instances(
                 p_mask, p_score, gt_mask, gt_score,
                 metrics, dice_factor, bce_factor, objectness_factor)
 
-    # Normalize by total number of instances to keep gradients stable
-    num_instances = max(len(gt_masks), 1)
-    return total_loss / num_instances, metrics
+    return total_loss / (TP + FP), metrics
