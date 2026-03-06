@@ -200,7 +200,7 @@ def loss_instances(
     # 1. Get our assignments
     # Assuming hungarian_matching returns:
     # matches: list[(p_idx, g_idx)], unmatched_preds: list[p_idx], unmatched_gts: list[g_idx]
-    matches, FP_indices, FN_indices = hungarian_matching(preds, gt_masks, iou_threshold=matching_iou)
+    matches, FP_indices, FN_indices = hungarian_matching(preds, gt_masks, iou_threshold=0.0)
 
     total_loss = torch.tensor(0.0, device=gt_masks.device)
     metrics = {"loss_dice": 0., "loss_ce": 0., "loss_objectness": 0.}
@@ -223,18 +223,6 @@ def loss_instances(
                 p_mask, p_score, gt_mask, gt_score,
                 metrics, dice_factor, bce_factor, objectness_factor)
 
-    # Force unmatched masks to be 0
-    # There should always be at least one extra mask, which has a score and all pixels towards 0.0
-    for i, p_idx in enumerate(FP_indices):
-        p_mask = preds[p_idx]
-        p_score = scores[p_idx]
-        gt_mask = torch.zeros_like(p_mask)
-        gt_score = torch.tensor(0.0, device=gt_mask.device)
-
-        total_loss += combined_instance_loss(
-            p_mask, p_score, gt_mask, gt_score,
-            metrics, dice_factor, bce_factor, objectness_factor)
-
     num_preds = TP + FP
     metrics = {k: v / num_preds for k, v in metrics.items()}
     metrics["recall"] = TP / (TP + FN)
@@ -245,4 +233,4 @@ def loss_instances(
     # Normalize by the minimum of the missed or additional predictions.
     # If we predict too many instances, we normalize by the number of actual instances
     # If we predict too few instances, we normalize by the number of predictions
-    return total_loss, metrics
+    return total_loss / (TP + FP), metrics
