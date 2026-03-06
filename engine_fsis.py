@@ -75,10 +75,13 @@ def train_one_epoch(
             if len(preds) == 0 or len(gt_instances) == 0:
                 continue
 
+            # No matching threshold during learning, we want to match all predictions to GTs (even if low IoU) to
+            # provide a learning signal. The loss function should handle the case of poor matches appropriately.
             loss, metrics = loss_instances(
                 preds,
                 gt_instances,
-                scores
+                scores,
+                matching_iou=0.0,
             )
             batch_loss += loss
             for k, v in metrics.items():

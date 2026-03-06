@@ -170,6 +170,7 @@ def loss_instances(
         preds: list,
         gt_masks: torch.Tensor,
         scores: torch.Tensor,
+        matching_iou: float = 0.5,
         dice_factor: float = 1.,
         bce_factor: float = 1.,
         fp_factor: float = 0.5,
@@ -178,7 +179,7 @@ def loss_instances(
     # 1. Get our assignments
     # Assuming hungarian_matching returns:
     # matches: list[(p_idx, g_idx)], unmatched_preds: list[p_idx], unmatched_gts: list[g_idx]
-    matches, FP_indices, FN_indices = hungarian_matching(preds, gt_masks, iou_threshold=0.5)
+    matches, FP_indices, FN_indices = hungarian_matching(preds, gt_masks, iou_threshold=matching_iou)
 
     total_loss = torch.tensor(0.0, device=gt_masks.device)
     metrics = {"loss_dice": 0., "loss_ce": 0., "loss_fp": 0., "loss_fn": 0.}
