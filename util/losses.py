@@ -171,6 +171,7 @@ def combined_instance_loss(
         p_score,
         gt_mask,
         gt_score,
+        missed_instance: int,
         metrics: dict,
         dice_factor: float = 1.,
         bce_factor: float = 1.,
@@ -179,7 +180,7 @@ def combined_instance_loss(
     # Use a combo of BCE and Dice for stable gradients
     loss_dice = dice_loss(p_mask.sigmoid(), gt_mask)
     loss_ce = F.binary_cross_entropy_with_logits(p_mask, gt_mask)
-    loss_objectness = F.binary_cross_entropy(p_score, gt_score)
+    loss_objectness = F.binary_cross_entropy(p_score, gt_score) * missed_instance
 
     metrics["loss_dice"] += loss_dice.detach().item()
     metrics["loss_ce"] += loss_ce.detach().item()
@@ -221,7 +222,9 @@ def loss_instances(
             gt_mask = gt_masks[g_idx].float().view_as(p_mask)
             gt_score = torch.tensor(1.0, device=gt_mask.device)
 
-            total_loss += combined_instance_loss(p_mask, p_score, gt_mask, gt_score, metrics, dice_factor, bce_factor, objectness_factor)
+            total_loss += combined_instance_loss(
+                p_mask, p_score, gt_mask, gt_score, FN,
+                metrics, dice_factor, bce_factor, objectness_factor)
 
     # From Recurrent Instance Segmentation
     # We need to also train the stop signal! Otherwise the model might run forever.
@@ -235,7 +238,9 @@ def loss_instances(
             gt_mask = torch.zeros_like(p_mask)
             gt_score = torch.tensor(0.0, device=gt_mask.device)
 
-            total_loss += combined_instance_loss(p_mask, p_score, gt_mask, gt_score, metrics, dice_factor, bce_factor, objectness_factor)
+            total_loss += combined_instance_loss(
+                p_mask, p_score, gt_mask, gt_score, FN,
+                metrics, dice_factor, bce_factor, objectness_factor)
 
     # Normalize by total number of instances to keep gradients stable
     num_instances = max(len(gt_masks), 1)
