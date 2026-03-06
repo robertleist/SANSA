@@ -118,7 +118,10 @@ def eval_instance(model: torch.nn.Module, args) -> dict:
     print(f"mAP_50: {results['map_50']:.4f}")
     print(f"mAP_75: {results['map_75']:.4f}")
 
-    return results
+    return {
+        k: v.item() if isinstance(v, torch.Tensor) else v
+        for k, v in results.items()
+    }
 
 
 if __name__ == '__main__':
