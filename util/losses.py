@@ -235,14 +235,15 @@ def loss_instances(
         gt_missed_mask = torch.logical_or(gt_mask, gt_missed_mask)
     gt_missed_mask = gt_missed_mask.float()
     if len(FP_indices) > 0:
-        for p_idx in FP_indices:
+        missed = FN
+        for i, p_idx in enumerate(FP_indices):
             p_mask = preds[p_idx]
             p_score = scores[p_idx]
 
             # Here we try to match to any of the left instances!
             # If no masks are left, matches to a all zero tensor and the score will also be 0
-            gt_mask = gt_missed_mask
-            gt_score = torch.tensor((torch.sum(gt_missed_mask) > 1).float(), device=gt_mask.device)
+            gt_mask = gt_missed_mask if i < missed else torch.zeros_like(p_mask)
+            gt_score = torch.tensor(1.0 if i < missed else 0.0, device=gt_mask.device)
 
             total_loss += combined_instance_loss(
                 p_mask, p_score, gt_mask, gt_score,
