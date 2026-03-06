@@ -107,7 +107,7 @@ def train_one_epoch(
                 mlflow.log_image(
                     image=image.cpu().numpy(),
                     key="sample",
-                    step=global_step,
+                    step=global_step + 10_000,  # Fix for MLFLOW log image bug
                 )
 
         if not math.isfinite(batch_loss.item()):
