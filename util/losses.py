@@ -171,7 +171,6 @@ def combined_instance_loss(
         p_score,
         gt_mask,
         gt_score,
-        missed_instance: int,
         metrics: dict,
         dice_factor: float = 1.,
         bce_factor: float = 1.,
@@ -180,7 +179,7 @@ def combined_instance_loss(
     # Use a combo of BCE and Dice for stable gradients
     loss_dice = dice_loss(p_mask.sigmoid(), gt_mask)
     loss_ce = F.binary_cross_entropy_with_logits(p_mask, gt_mask)
-    loss_objectness = F.binary_cross_entropy(p_score, gt_score) * missed_instance
+    loss_objectness = F.binary_cross_entropy(p_score, gt_score)
 
     metrics["loss_dice"] += loss_dice.detach().item()
     metrics["loss_ce"] += loss_ce.detach().item()
@@ -208,6 +207,8 @@ def loss_instances(
     TP = len(matches)
     FP = len(FP_indices)
     FN = len(FN_indices)
+    recall = TP / (TP + FN)
+    objectness_factor += (1 - recall)  # Does this make sense? It is supposed to encourage the model to predict more objects, so when it starts to predict less objects this part gets amplified
     metrics["recall"] = TP / (TP + FN)
     metrics["precision"] = TP / (TP + FP)
     metrics["accuracy"] = TP / (TP + FN + FP)
@@ -223,7 +224,7 @@ def loss_instances(
             gt_score = torch.tensor(1.0, device=gt_mask.device)
 
             total_loss += combined_instance_loss(
-                p_mask, p_score, gt_mask, gt_score, FN,
+                p_mask, p_score, gt_mask, gt_score,
                 metrics, dice_factor, bce_factor, objectness_factor)
 
     # From Recurrent Instance Segmentation
@@ -239,7 +240,7 @@ def loss_instances(
             gt_score = torch.tensor(0.0, device=gt_mask.device)
 
             total_loss += combined_instance_loss(
-                p_mask, p_score, gt_mask, gt_score, FN,
+                p_mask, p_score, gt_mask, gt_score,
                 metrics, dice_factor, bce_factor, objectness_factor)
 
     # Normalize by total number of instances to keep gradients stable
