@@ -41,7 +41,8 @@ def train_one_epoch(
         og_sizes = batch['org_size']
 
         # Max iterations must be at least the number of instances of the most
-        max_iterations = min(100, max(len(masks) for masks in instances_batch) + 5)
+        mlflow.log_metric("num_instances", max(len(masks) for masks in instances_batch))
+        max_iterations = min(50, max(len(masks) for masks in instances_batch) + 5)
         prompt_dict = build_prompt_dict_fsis(
             instances_batch,
             args.prompt,
