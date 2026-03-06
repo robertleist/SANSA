@@ -228,10 +228,6 @@ def loss_instances(
 
     normalize = TP + FN - (len(exclude_pred_ids) if exclude_pred_ids is not None else 0)
     metrics = {k: v / normalize for k, v in metrics.items()}
-    metrics["recall"] = TP / (TP + FN)
-    metrics["precision"] = TP / (TP + FP)
-    metrics["accuracy"] = TP / (TP + FN + FP)
-    metrics["f1-score"] = 2 * TP / (2 * TP + FP + FN)
 
     # Normalize by the minimum of the missed or additional predictions.
     # If we predict too many instances, we normalize by the number of actual instances
