@@ -114,7 +114,7 @@ def train_one_epoch(
                 )
                 mlflow.log_image(
                     key="sample_image",
-                    image=images[b].cpu().numpy(),
+                    image=images[b].permute(1, 2, 0).cpu().numpy(),
                     step=global_step + 10_000,
                 )
 
