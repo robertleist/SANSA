@@ -30,7 +30,7 @@ def main(args):
 
     if rank == 0:
         mlflow.set_experiment("FSIS")
-        mlflow.start_run(run_name=f"SANSA - {args.dataset_file}")
+        mlflow.start_run(run_name=f"SANSA - {args.name_exp}")
         mlflow.log_params(args.__dict__)
 
     print(args)
