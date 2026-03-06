@@ -229,7 +229,7 @@ def loss_instances(
 
     # If there are false positives it means we could not match them to a ground truth
     # First create a mask of all left gt instance
-    gt_missed_mask = torch.zeros(gt_masks.shape[-2:])
+    gt_missed_mask = torch.zeros(gt_masks.shape[-2:], device=gt_masks.device)
     for gt_idx in FN_indices:
         gt_mask = gt_masks[gt_idx]
         gt_missed_mask = torch.logical_or(gt_mask, gt_missed_mask)
