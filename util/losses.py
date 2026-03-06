@@ -233,6 +233,7 @@ def loss_instances(
     for gt_idx in FN_indices:
         gt_mask = gt_masks[gt_idx]
         gt_missed_mask = torch.logical_or(gt_mask, gt_missed_mask)
+    gt_missed_mask = gt_missed_mask.float()
     if len(FP_indices) > 0:
         for p_idx in FP_indices:
             p_mask = preds[p_idx]
