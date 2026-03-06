@@ -227,17 +227,21 @@ def loss_instances(
                 p_mask, p_score, gt_mask, gt_score,
                 metrics, dice_factor, bce_factor, objectness_factor)
 
-    # From Recurrent Instance Segmentation
-    # We need to also train the stop signal! Otherwise the model might run forever.
-    # Hence, we compare the scores against whether or not there are still masks left to be predicted.
-    # --- 3. FALSE POSITIVE LOSS (The "Hallucination" Penalty) ---
-    # Goal: Force "ghost" predictions to become empty backgrounds (all zeros)
+    # If there are false positives it means we could not match them to a ground truth
+    # First create a mask of all left gt instance
+    gt_missed_mask = torch.zeros(gt_masks.shape[-2:])
+    for gt_idx in FN_indices:
+        gt_mask = gt_masks[gt_idx]
+        gt_missed_mask = torch.logical_or(gt_mask, gt_missed_mask)
     if len(FP_indices) > 0:
         for p_idx in FP_indices:
             p_mask = preds[p_idx]
             p_score = scores[p_idx]
-            gt_mask = torch.zeros_like(p_mask)
-            gt_score = torch.tensor(0.0, device=gt_mask.device)
+
+            # Here we try to match to any of the left instances!
+            # If no masks are left, matches to a all zero tensor and the score will also be 0
+            gt_mask = gt_missed_mask
+            gt_score = torch.tensor((torch.sum(gt_missed_mask) > 1).float(), device=gt_mask.device)
 
             total_loss += combined_instance_loss(
                 p_mask, p_score, gt_mask, gt_score,
