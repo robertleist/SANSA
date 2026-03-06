@@ -2,6 +2,7 @@ import argparse
 from os.path import join
 
 import mlflow
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
@@ -118,10 +119,19 @@ def eval_instance(model: torch.nn.Module, args) -> dict:
     print(f"mAP_50: {results['map_50']:.4f}")
     print(f"mAP_75: {results['map_75']:.4f}")
 
-    return {
-        k: v.item() if isinstance(v, torch.Tensor) else v
-        for k, v in results.items()
-    }
+    results_dict = {}  # Transfer to loggable dict
+    for k, v in results.items():
+        if isinstance(v, torch.Tensor):
+            if v.shape[0] > 1:
+                print(f"Cant log {k} with value {v}")
+                continue
+            results_dict[k] = v.item()
+        else:
+            if isinstance(v, list) or isinstance(v, tuple) or isinstance(v, np.ndarray):
+                if len(v) > 1:
+                    print(f"Cant log {k} with value {v}")
+                    continue
+            results_dict[k] = v
 
 
 if __name__ == '__main__':
