@@ -249,4 +249,6 @@ def loss_instances(
                 p_mask, p_score, gt_mask, gt_score,
                 metrics, dice_factor, bce_factor, objectness_factor)
 
+    num_preds = TP + FP
+    metrics = {k: v / num_preds for k, v in metrics.items()}
     return total_loss / (TP + FP), metrics
