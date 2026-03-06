@@ -254,9 +254,6 @@ class InstanceSANSA(nn.Module):
                         memory_bank=self.get_memory_bank_dict()
                     )
                 score = torch.sigmoid(decoder_out.object_score_logits)
-                # Stop if the 'objectness' score is too low
-                if score < stopping_threshold:
-                    break
 
                 # Update memory so the NEXT iteration knows what is already segmented
                 mem_entry = self._compute_memory_bank_dict(decoder_out, backbone_output, idx=0)
@@ -264,7 +261,12 @@ class InstanceSANSA(nn.Module):
 
                 outputs["masks"].append(decoder_out.masks[0])
                 outputs["scores"].append(score)
-                i += 1
+                # Stop if the 'objectness' score is too low
+                if score < stopping_threshold:
+                    break
+                else:
+                    i += 1
+
             batch_output.append(
                 {
                     "masks": torch.stack(outputs["masks"], 1).squeeze(),
