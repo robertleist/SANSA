@@ -133,7 +133,7 @@ def train_one_epoch(
         metric_logger.update(**avg_metrics)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(grad_norm=grad_total_norm)
-        mlflow.log_metric(batch_loss.item(), key="loss", step=global_step)
+        mlflow.log_metric("loss", batch_loss.item(), step=global_step)
         mlflow.log_metrics(avg_metrics, step=global_step)
         mlflow.log_metrics({
             "lr": optimizer.param_groups[0]["lr"],
