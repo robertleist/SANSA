@@ -1,4 +1,5 @@
 import os
+from collections import OrderedDict, deque
 from typing import Any, Dict, List, Tuple
 
 import py3_wget
@@ -7,20 +8,25 @@ from hydra import compose, initialize
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch import nn
-import torch.nn.functional as F
 
-from models.sam2.modeling.sam2_utils import preprocess
 from models.sam2.modeling.sam2_base import SAM2Base
+from models.sam2.modeling.sam2_utils import preprocess
 from models.sansa.model_utils import BackboneOutput, DecoderOutput
 from util.path_utils import SAM2_PATHS_CONFIG, SAM2_WEIGHTS_URL
 from util.promptable_utils import rescale_prompt
 
 
 class InstanceSANSA(nn.Module):
-    def __init__(self, sam: SAM2Base, device: torch.device):
+    def __init__(
+            self,
+            sam: SAM2Base,
+            device: torch.device,
+            max_memories=7,
+    ):
         super().__init__()
         self.sam = sam
         self.device = device
+        self.memory_bank = deque(maxlen=max_memories)
 
     def _preprocess_visual_features(
             self, samples: torch.Tensor, image_size: int
@@ -174,6 +180,17 @@ class InstanceSANSA(nn.Module):
         vision_feats, vision_pos, sizes = self.sam._prepare_backbone_features(bb)
         return BackboneOutput(orig_size, vision_feats, vision_pos, sizes)
 
+    def add_memory(self, memory):
+        self.memory_bank.append(memory)
+
+    def reset_memory_bank(self):
+        self.memory_bank.clear()
+
+    def get_memory_bank_dict(self):
+        return {
+            i: entry for i, entry in enumerate(self.memory_bank)
+        }
+
     # Conceptual change for Instance Segmentation
     def forward(
             self,
@@ -200,7 +217,7 @@ class InstanceSANSA(nn.Module):
         batch_output = []
         for b in range(B):
             # For each image, reset the memory bank
-            self.memory_bank = {}
+            self.reset_memory_bank()
             outputs = {
                 "masks": [],
                 "scores": [],
@@ -229,11 +246,12 @@ class InstanceSANSA(nn.Module):
                         )
                 else:
                     # Subsequent instances: Use memory to avoid previous objects
+                    # Uses the same image embeddings -> idx = b
                     decoder_out = self._compute_decoder_out_w_mem(
                         backbone_output,
-                        idx=0,
+                        idx=b,
                         memory_idx=i,
-                        memory_bank=self.memory_bank
+                        memory_bank=self.get_memory_bank_dict()
                     )
                 score = torch.sigmoid(decoder_out.object_score_logits)
                 # Stop if the 'objectness' score is too low
@@ -242,7 +260,7 @@ class InstanceSANSA(nn.Module):
 
                 # Update memory so the NEXT iteration knows what is already segmented
                 mem_entry = self._compute_memory_bank_dict(decoder_out, backbone_output, idx=0)
-                self.memory_bank[i] = mem_entry
+                self.add_memory(i, mem_entry)
 
                 outputs["masks"].append(decoder_out.masks[0])
                 outputs["scores"].append(score)
