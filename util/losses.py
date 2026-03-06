@@ -241,4 +241,4 @@ def loss_instances(
     metrics["precision"] = TP / (TP + FP)
     metrics["accuracy"] = TP / (TP + FN + FP)
     metrics["f1-score"] = 2 * TP / (2 * TP + FP + FN)
-    return total_loss / (TP + FP), metrics
+    return total_loss / (TP + FN), metrics
