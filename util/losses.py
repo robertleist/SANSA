@@ -245,4 +245,4 @@ def loss_instances(
     # Normalize by the minimum of the missed or additional predictions.
     # If we predict too many instances, we normalize by the number of actual instances
     # If we predict too few instances, we normalize by the number of predictions
-    return total_loss / (TP + min(FP, FN)), metrics
+    return total_loss, metrics
