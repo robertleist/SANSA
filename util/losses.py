@@ -207,12 +207,8 @@ def loss_instances(
     TP = len(matches)
     FP = len(FP_indices)
     FN = len(FN_indices)
-    recall = TP / (TP + FN)
+    # recall = TP / (TP + FN)
     # objectness_factor += (1  - recall)  # Does this make sense? It is supposed to encourage the model to predict more objects, so when it starts to predict less objects this part gets amplified
-    metrics["recall"] = TP / (TP + FN)
-    metrics["precision"] = TP / (TP + FP)
-    metrics["accuracy"] = TP / (TP + FN + FP)
-    metrics["f1-score"] = 2 * TP / (2 * TP + FP + FN)
 
     # --- 2. MATCHED LOSS (True Positives) ---
     # Goal: Refine the shape of correctly identified instances
@@ -251,4 +247,8 @@ def loss_instances(
 
     num_preds = TP + FP
     metrics = {k: v / num_preds for k, v in metrics.items()}
+    metrics["recall"] = TP / (TP + FN)
+    metrics["precision"] = TP / (TP + FP)
+    metrics["accuracy"] = TP / (TP + FN + FP)
+    metrics["f1-score"] = 2 * TP / (2 * TP + FP + FN)
     return total_loss / (TP + FP), metrics
