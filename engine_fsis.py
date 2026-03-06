@@ -105,11 +105,16 @@ def train_one_epoch(
                 # Red: Missed GT instances
                 # Green: Found GT instances
                 # Blue: Hallucinations
-                image = torch.stack([gt_only, intersection, pred_only], dim=-1)
+                mask_rgb = torch.stack([gt_only, intersection, pred_only], dim=-1)
                 mlflow.log_image(
-                    image=image.cpu().numpy(),
-                    key="sample",
+                    image=mask_rgb.cpu().numpy(),
+                    key="sample_mask",
                     step=global_step + 10_000,  # Fix for MLFLOW log image bug
+                )
+                mlflow.log_image(
+                    key="sample_image",
+                    image=images[b].cpu().numpy(),
+                    step=global_step + 10_000,
                 )
 
         if not math.isfinite(batch_loss.item()):
