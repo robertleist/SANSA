@@ -241,4 +241,8 @@ def loss_instances(
     metrics["precision"] = TP / (TP + FP)
     metrics["accuracy"] = TP / (TP + FN + FP)
     metrics["f1-score"] = 2 * TP / (2 * TP + FP + FN)
-    return total_loss / (TP + FN), metrics
+
+    # Normalize by the minimum of the missed or additional predictions.
+    # If we predict too many instances, we normalize by the number of actual instances
+    # If we predict too few instances, we normalize by the number of predictions
+    return total_loss / (TP + min(FP, FN)), metrics
