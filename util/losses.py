@@ -205,7 +205,7 @@ def loss_instances(
     total_loss = torch.tensor(0.0, device=gt_masks.device)
     metrics = {"loss_dice": 0., "loss_ce": 0., "loss_objectness": 0.}
     TP = len(matches)
-    FP = len(FP_indices)
+    FP = len(FP_indices)  # Should always be 0
     FN = len(FN_indices)
     # recall = TP / (TP + FN)
     # objectness_factor += (1  - recall)  # Does this make sense? It is supposed to encourage the model to predict more objects, so when it starts to predict less objects this part gets amplified
@@ -233,4 +233,4 @@ def loss_instances(
     # Normalize by the minimum of the missed or additional predictions.
     # If we predict too many instances, we normalize by the number of actual instances
     # If we predict too few instances, we normalize by the number of predictions
-    return total_loss / (TP + FP), metrics
+    return total_loss / (TP + FN), metrics
