@@ -166,6 +166,28 @@ def dice_loss(inputs, targets, smooth=1.0):
     return 1 - dice
 
 
+def combined_instance_loss(
+        p_mask,
+        p_score,
+        gt_mask,
+        gt_score,
+        metrics: dict,
+        dice_factor: float = 1.,
+        bce_factor: float = 1.,
+        objectness_factor: float = 1.,
+):
+    # Use a combo of BCE and Dice for stable gradients
+    loss_dice = dice_loss(p_mask.sigmoid(), gt_mask)
+    loss_ce = F.binary_cross_entropy_with_logits(p_mask, gt_mask)
+    loss_objectness = F.binary_cross_entropy(p_score, gt_score)
+
+    metrics["loss_dice"] += loss_dice.detach().item()
+    metrics["loss_ce"] += loss_ce.detach().item()
+    metrics["loss_objectness"] += loss_objectness.detach().item()
+
+    return dice_factor * loss_dice + bce_factor * loss_ce + objectness_factor * loss_objectness
+
+
 def loss_instances(
         preds: list,
         gt_masks: torch.Tensor,
@@ -173,8 +195,7 @@ def loss_instances(
         matching_iou: float = 0.5,
         dice_factor: float = 1.,
         bce_factor: float = 1.,
-        fp_factor: float = 0.5,
-        fn_factor: float = 0.5,
+        objectness_factor: float = 1.,
 ):
     # 1. Get our assignments
     # Assuming hungarian_matching returns:
@@ -196,17 +217,11 @@ def loss_instances(
     if len(matches) > 0:
         for p_idx, g_idx, _ in matches:
             p_mask = preds[p_idx]
-            target = gt_masks[g_idx].float().view_as(p_mask)
+            p_score = scores[p_idx]
+            gt_mask = gt_masks[g_idx].float().view_as(p_mask)
+            gt_score = torch.tensor(1.0, device=gt_mask.device)
 
-            # Use a combo of BCE and Dice for stable gradients
-            loss_dice = dice_loss(p_mask.sigmoid(), target)
-            loss_ce = F.binary_cross_entropy_with_logits(p_mask, target)
-
-            match_loss = dice_factor * loss_dice + bce_factor * loss_ce
-            total_loss += match_loss
-
-            metrics["loss_dice"] += loss_dice.detach().item()
-            metrics["loss_ce"] += loss_ce.detach().item()
+            total_loss += combined_instance_loss(p_mask, p_score, gt_mask, gt_score, metrics, dice_factor, bce_factor, objectness_factor)
 
     # From Recurrent Instance Segmentation
     # We need to also train the stop signal! Otherwise the model might run forever.
@@ -215,29 +230,12 @@ def loss_instances(
     # Goal: Force "ghost" predictions to become empty backgrounds (all zeros)
     if len(FP_indices) > 0:
         for p_idx in FP_indices:
-            # Preds are towards 1
-            p_scores = scores[p_idx]
+            p_mask = preds[p_idx]
+            p_score = scores[p_idx]
+            gt_mask = torch.zeros_like(p_mask)
+            gt_score = torch.tensor(0.0, device=gt_mask.device)
 
-            # But target should be 0
-            target = torch.zeros_like(p_scores)
-
-            # We typically weight FP loss lower so the model isn't too afraid to predict
-            fp_loss = F.binary_cross_entropy(p_scores, target) * fp_factor / len(FP_indices)
-            total_loss += fp_loss
-            metrics["loss_fp"] += fp_loss.detach().item()
-
-    # --- 4. FALSE NEGATIVE LOSS (The "Completeness" Penalty) ---
-    # Goal: Penalize the model for missing an entire instance
-    # Note: Since there is no prediction to anchor to, we often penalize
-    # a separate "objectness" score or the iteration "stop" signal.
-    if len(FN_indices) > 0:
-        # This means we stopped too early, hence we need to pass some background
-        # Take the last score and apply a loss which scales with the amount of instances missed.
-        last_score = scores[-1]
-        target = torch.ones_like(last_score)
-        fn_loss = F.binary_cross_entropy(last_score, target) * fn_factor
-        total_loss += fn_loss
-        metrics["loss_fn"] += fn_loss.detach().item()
+            total_loss += combined_instance_loss(p_mask, p_score, gt_mask, gt_score, metrics, dice_factor, bce_factor, objectness_factor)
 
     # Normalize by total number of instances to keep gradients stable
     num_instances = max(len(gt_masks), 1)
