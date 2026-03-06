@@ -125,13 +125,13 @@ def eval_instance(model: torch.nn.Module, args) -> dict:
             if v.shape[0] > 1:
                 print(f"Cant log {k} with value {v}")
                 continue
-            results_dict[k] = v.item()
+            results_dict[f"eval_{k}"] = v.item()
         else:
             if isinstance(v, list) or isinstance(v, tuple) or isinstance(v, np.ndarray):
                 if len(v) > 1:
                     print(f"Cant log {k} with value {v}")
                     continue
-            results_dict[k] = v
+            results_dict[f"eval_{k}"] = v
 
 
 if __name__ == '__main__':
