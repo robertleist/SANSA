@@ -260,7 +260,7 @@ class InstanceSANSA(nn.Module):
 
                 # Update memory so the NEXT iteration knows what is already segmented
                 mem_entry = self._compute_memory_bank_dict(decoder_out, backbone_output, idx=0)
-                self.add_memory(i, mem_entry)
+                self.add_memory(mem_entry)
 
                 outputs["masks"].append(decoder_out.masks[0])
                 outputs["scores"].append(score)
