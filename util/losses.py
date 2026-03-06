@@ -196,6 +196,7 @@ def loss_instances(
         dice_factor: float = 1.,
         bce_factor: float = 1.,
         objectness_factor: float = 1.,
+        exclude_pred_ids: list[int] = None,
 ):
     # 1. Get our assignments
     # Assuming hungarian_matching returns:
@@ -214,6 +215,8 @@ def loss_instances(
     # Goal: Refine the shape of correctly identified instances
     if len(matches) > 0:
         for p_idx, g_idx, _ in matches:
+            if p_idx in exclude_pred_ids:
+                continue
             p_mask = preds[p_idx]
             p_score = scores[p_idx]
             gt_mask = gt_masks[g_idx].float().view_as(p_mask)
@@ -223,8 +226,8 @@ def loss_instances(
                 p_mask, p_score, gt_mask, gt_score,
                 metrics, dice_factor, bce_factor, objectness_factor)
 
-    num_preds = TP + FP
-    metrics = {k: v / num_preds for k, v in metrics.items()}
+    normalize = TP + FN - (len(exclude_pred_ids) if exclude_pred_ids is not None else 0)
+    metrics = {k: v / normalize for k, v in metrics.items()}
     metrics["recall"] = TP / (TP + FN)
     metrics["precision"] = TP / (TP + FP)
     metrics["accuracy"] = TP / (TP + FN + FP)
@@ -233,4 +236,4 @@ def loss_instances(
     # Normalize by the minimum of the missed or additional predictions.
     # If we predict too many instances, we normalize by the number of actual instances
     # If we predict too few instances, we normalize by the number of predictions
-    return total_loss / (TP + FN), metrics
+    return total_loss / normalize, metrics
