@@ -82,6 +82,7 @@ def train_one_epoch(
                 gt_instances,
                 scores,
                 matching_iou=0.01,
+                objectness_factor=0.
             )
             batch_loss += loss
             for k, v in metrics.items():
