@@ -81,7 +81,7 @@ def train_one_epoch(
                 preds,
                 gt_instances,
                 scores,
-                matching_iou=0.01,
+                matching_iou=1e-6,
                 objectness_factor=0.
             )
             batch_loss += loss
