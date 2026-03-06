@@ -208,7 +208,7 @@ def loss_instances(
     FP = len(FP_indices)
     FN = len(FN_indices)
     recall = TP / (TP + FN)
-    objectness_factor += (1 / (recall + 1e-6))  # Does this make sense? It is supposed to encourage the model to predict more objects, so when it starts to predict less objects this part gets amplified
+    objectness_factor += (1  - recall)  # Does this make sense? It is supposed to encourage the model to predict more objects, so when it starts to predict less objects this part gets amplified
     metrics["recall"] = TP / (TP + FN)
     metrics["precision"] = TP / (TP + FP)
     metrics["accuracy"] = TP / (TP + FN + FP)
