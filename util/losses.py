@@ -203,7 +203,7 @@ def loss_instances(
     matches, FP_indices, FN_indices = hungarian_matching(preds, gt_masks, iou_threshold=matching_iou)
 
     total_loss = torch.tensor(0.0, device=gt_masks.device)
-    metrics = {"loss_dice": 0., "loss_ce": 0., "loss_fp": 0., "loss_fn": 0.}
+    metrics = {"loss_dice": 0., "loss_ce": 0., "loss_objectness": 0.}
     TP = len(matches)
     FP = len(FP_indices)
     FN = len(FN_indices)
