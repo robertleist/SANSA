@@ -1,4 +1,5 @@
 import math
+import random
 import sys
 from collections import defaultdict
 from typing import Iterable, Optional
@@ -11,17 +12,90 @@ from torch.nn import Module
 from torch.optim import Optimizer
 
 import util.misc as utils
+from eval_fsis import eval_batch
+from models.sansa.inst_sansa import InstanceSANSA
 from util.losses import loss_instances  # Assume this handles Dice/BCE for matched pairs
 from util.promptable_utils import build_prompt_dict_fsis
 
 
+def backprop_and_log(
+        optimizer,
+        loss,
+        model,
+        lr_scheduler,
+        metric_logger,
+        metrics,
+        step,
+        max_norm: float = 0.0,
+):
+    optimizer.zero_grad(set_to_none=True)
+    if loss.requires_grad:
+        loss.backward()
+
+        grad_total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+        optimizer.step()
+    else:
+        grad_total_norm = 0.0
+        print("Skipping backward: No gradients to compute for this batch.")
+
+    if lr_scheduler is not None:
+        lr_scheduler.step()
+
+    # Logging
+    avg_metrics = {k: np.average(v) for k, v in metrics.items()}
+    metric_logger.update(loss=loss.item())
+    metric_logger.update(**avg_metrics)
+    metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+    metric_logger.update(grad_norm=grad_total_norm)
+    mlflow.log_metric("loss", loss.item(), step=step)
+    mlflow.log_metrics(avg_metrics, step=step)
+    mlflow.log_metrics({
+        "lr": optimizer.param_groups[0]["lr"],
+        "grad_norm": grad_total_norm,
+    }, step=step)
+
+
+def log_an_image(
+        pred_instance_masks,
+        gt_instance_masks,
+        image,
+        step
+):
+    # Log artifacts
+    pred_mask = pred_instance_masks[0]
+    for instance_mask in pred_instance_masks[1:]:
+        pred_mask = torch.logical_or(pred_mask, instance_mask)
+    gt_mask = gt_instance_masks[0]
+    for instance_mask in gt_instance_masks[1:]:
+        gt_mask = torch.logical_or(gt_mask, instance_mask)
+    intersection = torch.logical_and(pred_mask, gt_mask)
+    pred_only = torch.logical_and(pred_mask, torch.logical_not(intersection))
+    gt_only = torch.logical_and(gt_mask, torch.logical_not(intersection))
+    # Stack the image to RGB
+    # Red: Missed GT instances
+    # Green: Found GT instances
+    # Blue: Hallucinations
+    mask_rgb = torch.stack([gt_only, intersection, pred_only], dim=-1)
+    mlflow.log_image(
+        image=mask_rgb.cpu().numpy(),
+        key="sample_mask",
+        step=step + 10_000,  # Fix for MLFLOW log image bug
+    )
+    mlflow.log_image(
+        key="sample_image",
+        image=image.permute(1, 2, 0).cpu().numpy(),
+        step=step + 10_000,
+    )
+
+
 def train_one_epoch(
-        model: Module,
+        model: InstanceSANSA,
         data_loader: Iterable,
         optimizer: Optimizer,
         device: torch.device,
         epoch: int,
         max_norm: float = 0.0,
+        optimize_iteration: bool = True,
         lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         args: Optional[object] = None,
 ) -> dict:
@@ -29,7 +103,6 @@ def train_one_epoch(
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 1
-    best_output = None
     best_score = np.inf
 
     for i, batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
@@ -54,99 +127,76 @@ def train_one_epoch(
 
         # 2. Forward Pass
         # We run the iterative discovery loop inside the model
-        # outputs is now a list (len B) of dicts containing "masks" and "scores"
-        batch_outputs = model(images, prompt_dict, max_iterations=max_iterations)
-
         batch_loss = torch.tensor(0.0, device=device)
+        batch_outputs = defaultdict(lambda: defaultdict(list))
         batch_metrics = defaultdict(list)
-        # 3. Sequential Greedy Matching & Loss Calculation
-        for b in range(len(batch_outputs)):
-            preds = batch_outputs[b]["masks"]  # List of Tensors [H, W]
-            scores = batch_outputs[b]["scores"]  # List of Tensors [1]
-            gt_instances = instances_batch[b].to(device)  # [N_gt, H, W]
-            og_size = og_sizes[b]
-
-            # Resize predictions
-            preds = F.interpolate(
-                preds.unsqueeze(1),
-                og_size,
-                mode='bilinear',
-            ).squeeze(1)
-
-            if len(preds) == 0 or len(gt_instances) == 0:
-                continue
-
-            # Very small matching threshold during learning, we want to match all predictions to GTs (even if low IoU) to
-            # provide a learning signal. The loss function should handle the case of poor matches appropriately.
-            loss, metrics = loss_instances(
-                preds,
-                gt_instances,
-                scores,
-                matching_iou=1e-6,
-                objectness_factor=0.,
-                exclude_pred_ids=[i for i in range(args.shots)]
+        memory_batch = defaultdict(dict)
+        for current_iteration in range(max_iterations):
+            iter_outputs, memory_batch = model.forward(
+                    image_batch=images,
+                    prompt_batch=prompt_dict,
+                    memory_batch=memory_batch,
+                    current_iteration=current_iteration,
+                )
+            # Append the iter output
+            for b in range(len(iter_outputs)):
+                for k, v in iter_outputs[b].items():
+                    batch_outputs[b][k].append(v)
+            # Eval this iteration
+            iter_loss, iter_metrics = eval_batch(
+                pred_instances_batch=[output["masks"] for output in iter_outputs],
+                pred_scores_batch=[output["scores"] for output in iter_outputs],
+                gt_instances_batch=[instances.to(device) for instances in instances_batch],
+                exclude_first_k_shots=None,
+                device=device
             )
-            batch_loss += loss
-            for k, v in metrics.items():
-                batch_metrics[k].append(v)
-            if loss < best_score:
-                best_score = loss
-                # Log artifacts
-                pred_instance_masks = (preds.sigmoid() > 0.5).bool()
-                pred_mask = pred_instance_masks[0]
-                for instance_mask in pred_instance_masks[1:]:
-                    pred_mask = torch.logical_or(pred_mask, instance_mask)
-                gt_mask = gt_instances[0]
-                for instance_mask in gt_instances[1:]:
-                    gt_mask = torch.logical_or(gt_mask, instance_mask)
-                intersection = torch.logical_and(pred_mask, gt_mask)
-                pred_only = torch.logical_and(pred_mask, torch.logical_not(intersection))
-                gt_only = torch.logical_and(gt_mask, torch.logical_not(intersection))
-                # Stack the image to RGB
-                # Red: Missed GT instances
-                # Green: Found GT instances
-                # Blue: Hallucinations
-                mask_rgb = torch.stack([gt_only, intersection, pred_only], dim=-1)
-                mlflow.log_image(
-                    image=mask_rgb.cpu().numpy(),
-                    key="sample_mask",
-                    step=global_step + 10_000,  # Fix for MLFLOW log image bug
+            # Decide whether we optimize at the iteration level or at the sequence level
+            if optimize_iteration:
+                backprop_and_log(
+                    optimizer,
+                    iter_loss,
+                    model,
+                    lr_scheduler,
+                    metric_logger,
+                    iter_metrics,
+                    global_step + current_iteration,
+                    max_norm
                 )
-                mlflow.log_image(
-                    key="sample_image",
-                    image=images[b].permute(1, 2, 0).cpu().numpy(),
-                    step=global_step + 10_000,
-                )
+            else:
+                # We sum the loss up
+                batch_loss += iter_loss
+                for k, v in iter_metrics:
+                    batch_metrics[k] += v if isinstance(v, list) else [v]
+
+
+        # 3. Sequential Greedy Matching & Loss Calculation
+        if batch_loss.item() < best_score:
+            best_score = batch_loss.item()
+            random_index_from_batch = random.choice(range(len(images)))
+            log_an_image(
+                batch_outputs[random_index_from_batch]["masks"],
+                instances_batch[random_index_from_batch],
+                images[random_index_from_batch],
+                i + 10_000,
+            )
+
 
         if not math.isfinite(batch_loss.item()):
             print(f"Loss is {batch_loss.item()}, stopping training")
             sys.exit(1)
+        if not optimize_iteration:
+            # We optimize the sequence
+            backprop_and_log(
+                optimizer,
+                batch_loss,
+                model,
+                lr_scheduler,
+                metric_logger,
+                batch_metrics,
+                global_step,
+                max_norm
+            )
 
-        optimizer.zero_grad(set_to_none=True)
-        if batch_loss.requires_grad:
-            batch_loss.backward()
-
-            grad_total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-            optimizer.step()
-        else:
-            grad_total_norm = torch.tensor(0.0, device=device)
-            print("Skipping backward: No gradients to compute for this batch.")
-
-        if lr_scheduler is not None:
-            lr_scheduler.step()
-
-        # Logging
-        avg_metrics = {k: np.average(v) for k, v in batch_metrics.items()}
-        metric_logger.update(loss=batch_loss.item())
-        metric_logger.update(**avg_metrics)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        metric_logger.update(grad_norm=grad_total_norm)
-        mlflow.log_metric("loss", batch_loss.item(), step=global_step)
-        mlflow.log_metrics(avg_metrics, step=global_step)
-        mlflow.log_metrics({
-            "lr": optimizer.param_groups[0]["lr"],
-            "grad_norm": grad_total_norm,
-        }, step=global_step)
 
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)

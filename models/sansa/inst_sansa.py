@@ -1,5 +1,5 @@
 import os
-from collections import OrderedDict, deque
+from torchvision.transforms.functional import resize
 from typing import Any, Dict, List, Tuple
 
 import py3_wget
@@ -21,12 +21,11 @@ class InstanceSANSA(nn.Module):
             self,
             sam: SAM2Base,
             device: torch.device,
-            max_memories=7,
     ):
         super().__init__()
         self.sam = sam
         self.device = device
-        self.memory_bank = deque(maxlen=max_memories)
+        self.memory_bank: dict[int, dict[str, torch.Tensor]] = {} # Key: Num of batch, Value: Memory bank for this image
 
     def _preprocess_visual_features(
             self, samples: torch.Tensor, image_size: int
@@ -191,8 +190,77 @@ class InstanceSANSA(nn.Module):
             i: entry for i, entry in enumerate(self.memory_bank)
         }
 
-    # Conceptual change for Instance Segmentation
     def forward(
+            self,
+            image_batch: torch.Tensor,
+            prompt_batch: torch.Tensor,
+            memory_batch: list[dict[int, dict[str, torch.Tensor]]],
+            current_iteration: int,
+    ):
+        # Bring image into [B, T, C, H, W] shape. B = Batches, T = Tensors (Support and Query images originally)
+        # Preprocess batches
+        batch_reshaped = image_batch.unsqueeze(1)  # [B, 1, C, H, W], we dont need T because we operate on the same image
+        image_batch, B, T, orig_size = self._preprocess_visual_features(batch_reshaped, self.sam.image_size)
+        assert T == 1, f"T is {T}, this will lead to unexpected behaviour."
+        backbone_output = self._forward_backbone(image_batch, orig_size)
+
+        # Process sequentially
+        batch_output = []
+        for b in range(B):
+            outputs = {
+                "masks": [],
+                "scores": [],
+            }
+            memory_bank = memory_batch[b]
+            # During inference, set max_iterations to None to make the model run until it predicts no more objects.
+            image_prompts = prompt_batch[b]
+            if current_iteration < len(image_prompts):
+                # Iterate over the prompts
+                frame_prompt_dict = image_prompts[current_iteration]
+                frame_prompt = frame_prompt_dict['prompt']
+                prompt_type = frame_prompt_dict['prompt_type']
+                frame_prompt = rescale_prompt(frame_prompt, prompt_type, orig_size[b], self.sam.image_size)
+                if prompt_type == 'mask':
+                    decoder_out: DecoderOutput = self.sam._use_mask_as_output(
+                        backbone_output,
+                        frame_prompt,
+                        b
+                    )
+                else:
+                    decoder_out: DecoderOutput = self._compute_decoder_out_no_mem(
+                        backbone_output,
+                        b,
+                        prompt_input=frame_prompt
+                    )
+            else:
+                # Subsequent instances: Use memory to avoid previous objects
+                # Uses the same image embeddings -> idx = b
+                decoder_out = self._compute_decoder_out_w_mem(
+                    backbone_output,
+                    idx=b,
+                    memory_idx=current_iteration,
+                    memory_bank=memory_bank,
+                )
+
+            score = torch.sigmoid(decoder_out.object_score_logits)
+
+            # Update memory so the NEXT iteration knows what is already segmented
+            mem_entry = self._compute_memory_bank_dict(decoder_out, backbone_output, idx=b)
+            memory_batch[b][current_iteration] = mem_entry
+
+            mask_out = decoder_out.masks[0]
+            mask_out_resized = resize(mask_out, list(orig_size[b]))
+            outputs["masks"].append(mask_out_resized)
+            outputs["scores"].append(score)
+            batch_output.append(
+                {
+                    "masks": torch.stack(outputs["masks"], 1),
+                    "scores": torch.stack(outputs["scores"], 1),
+                }
+            )
+        return batch_output, memory_batch
+
+    def inference(
             self,
             batch: torch.Tensor,
             prompt_batch: List[List[Dict[str, Any]]],

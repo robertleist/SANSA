@@ -11,12 +11,13 @@ from torch.utils.data import Dataset
 from datasets.transform_utils import polygons_to_bitmask
 import pycocotools.mask as mask_util
 from torchvision import transforms
+from torchvision.transforms.functional import resize
 
 
 class DatasetLVIS(Dataset):
     def __init__(
             self,
-                 datapath,
+            datapath,
             fold,
             transform,
             split,
