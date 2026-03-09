@@ -179,7 +179,7 @@ def combined_instance_loss(
     # Use a combo of BCE and Dice for stable gradients
     loss_dice = dice_loss(p_mask.sigmoid(), gt_mask)
     loss_ce = F.binary_cross_entropy_with_logits(p_mask, gt_mask)
-    loss_objectness = F.binary_cross_entropy(p_score, gt_score)
+    loss_objectness = F.binary_cross_entropy(p_score.squeeze(), gt_score)
 
     metrics["loss_dice"] += loss_dice.detach().item()
     metrics["loss_ce"] += loss_ce.detach().item()
