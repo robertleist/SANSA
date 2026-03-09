@@ -55,6 +55,18 @@ def backprop_and_log(
     }, step=step)
 
 
+def detach_memory(memory_batch: dict[int, dict[int, dict[str, torch.Tensor]]]):
+    for i, mem_bank in memory_batch.items():
+        for j, mem_entry in mem_bank.items():
+            for k, mem_tensors in mem_entry.items():
+                if isinstance(mem_tensors, torch.Tensor):
+                    memory_batch[i][j][k] = mem_tensors.detach()
+                elif isinstance(mem_tensors, list):
+                    memory_batch[i][j][k] = [list_tensor.detach() for list_tensor in mem_tensors]
+    return memory_batch
+
+
+
 def log_an_image(
         pred_instance_masks,
         gt_instance_masks,
@@ -62,6 +74,14 @@ def log_an_image(
         step
 ):
     # Log artifacts
+    # Resize pred masks
+    pred_instance_masks = torch.stack(pred_instance_masks, 0).squeeze(1)
+    pred_instance_masks = F.interpolate(
+        pred_instance_masks,
+        size=gt_instance_masks.shape[-2:],
+        mode='bilinear',
+        align_corners=False,
+    ).squeeze()
     pred_mask = pred_instance_masks[0]
     for instance_mask in pred_instance_masks[1:]:
         pred_mask = torch.logical_or(pred_mask, instance_mask)
@@ -160,6 +180,7 @@ def train_one_epoch(
                     matched_instances_per_batch[k] += v
             # Decide whether we optimize at the iteration level or at the sequence level
             if optimize_iteration:
+                # Causes error: "Trying to backward through the graph a second time"
                 backprop_and_log(
                     optimizer,
                     iter_loss,
@@ -170,6 +191,7 @@ def train_one_epoch(
                     global_step + current_iteration,
                     max_norm
                 )
+                detach_memory(memory_batch)
             else:
                 # We sum the loss up
                 batch_loss += iter_loss
@@ -183,7 +205,7 @@ def train_one_epoch(
             random_index_from_batch = random.choice(range(len(images)))
             log_an_image(
                 batch_outputs[random_index_from_batch]["masks"],
-                instances_batch[random_index_from_batch],
+                instances_batch[random_index_from_batch].to(device),
                 images[random_index_from_batch],
                 i + 10_000,
             )

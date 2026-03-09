@@ -194,7 +194,7 @@ class InstanceSANSA(nn.Module):
             self,
             image_batch: torch.Tensor,
             prompt_batch: torch.Tensor,
-            memory_batch: list[dict[int, dict[str, torch.Tensor]]],
+            memory_batch: dict[int, dict[int, dict[str, torch.Tensor]]],
             current_iteration: int,
     ):
         # Bring image into [B, T, C, H, W] shape. B = Batches, T = Tensors (Support and Query images originally)
