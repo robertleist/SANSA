@@ -190,7 +190,7 @@ def train_one_epoch(
                 detach_memory(memory_batch)
             # We sum the loss up
             batch_loss += iter_loss
-            for k, v in iter_metrics:
+            for k, v in iter_metrics.items():
                 batch_metrics[k] += v if isinstance(v, list) else [v]
 
 
