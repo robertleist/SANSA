@@ -1,4 +1,6 @@
 import os
+from collections import defaultdict
+
 from torchvision.transforms.functional import resize
 from typing import Any, Dict, List, Tuple
 
@@ -263,7 +265,7 @@ class InstanceSANSA(nn.Module):
     def inference(
             self,
             batch: torch.Tensor,
-            prompt_batch: List[List[Dict[str, Any]]],
+            prompt_batch: torch.Tensor,
             max_iterations: int = None,
             stopping_threshold: float = 0.5,
     ):
@@ -275,73 +277,21 @@ class InstanceSANSA(nn.Module):
             max_iterations: Control the number of iterations.
             stopping_threshold: If the predicted objectness score is below this threshold the iteration cycle ends.
         """
-        # Bring image into [B, T, C, H, W] shape. B = Batches, T = Tensors (Support and Query images originally)
-        # Preprocess batches
-        batch_reshaped = batch.unsqueeze(1)
-        batch, B, T, orig_size = self._preprocess_visual_features(batch_reshaped, self.sam.image_size)
-        backbone_output = self._forward_backbone(batch, orig_size)
-
         # Process sequentially -> Cannot be parallelized
-        batch_output = []
-        for b in range(B):
-            # For each image, reset the memory bank
-            self.reset_memory_bank()
-            outputs = {
-                "masks": [],
-                "scores": [],
-            }
-            i = 0
-            while max_iterations is None or not i > max_iterations:
-                # During inference, set max_iterations to None to make the model run until it predicts no more objects.
-                image_prompts = prompt_batch[b]
-                if i < len(image_prompts):
-                    # Iterate over the prompts
-                    frame_prompt_dict = image_prompts[i]
-                    frame_prompt = frame_prompt_dict['prompt']
-                    prompt_type = frame_prompt_dict['prompt_type']
-                    frame_prompt = rescale_prompt(frame_prompt, prompt_type, orig_size[0], self.sam.image_size)
-                    if prompt_type == 'mask':
-                        decoder_out: DecoderOutput = self.sam._use_mask_as_output(
-                            backbone_output,
-                            frame_prompt,
-                            b
-                        )
-                    else:
-                        decoder_out: DecoderOutput = self._compute_decoder_out_no_mem(
-                            backbone_output,
-                            b,
-                            prompt_input=frame_prompt
-                        )
-                else:
-                    # Subsequent instances: Use memory to avoid previous objects
-                    # Uses the same image embeddings -> idx = b
-                    decoder_out = self._compute_decoder_out_w_mem(
-                        backbone_output,
-                        idx=b,
-                        memory_idx=i,
-                        memory_bank=self.get_memory_bank_dict()
-                    )
-                score = torch.sigmoid(decoder_out.object_score_logits)
-
-                # Update memory so the NEXT iteration knows what is already segmented
-                mem_entry = self._compute_memory_bank_dict(decoder_out, backbone_output, idx=0)
-                self.add_memory(mem_entry)
-
-                outputs["masks"].append(decoder_out.masks[0])
-                outputs["scores"].append(score)
-                # Stop if the 'objectness' score is too low
-                if score < stopping_threshold:
-                    break
-                else:
-                    i += 1
-
-            batch_output.append(
-                {
-                    "masks": torch.stack(outputs["masks"], 1).squeeze(),
-                    "scores": torch.stack(outputs["scores"], 1).squeeze(),
-                }
+        batch_outputs = defaultdict(lambda: defaultdict(list))
+        memory_batch: dict[int, dict[int, dict[str, torch.Tensor]]] = defaultdict(lambda: defaultdict(dict))
+        for current_iteration in range(max_iterations):
+            iter_outputs, memory_batch = self.forward(
+                image_batch=batch,
+                prompt_batch=prompt_batch,
+                memory_batch=memory_batch,
+                current_iteration=current_iteration,
             )
-        return batch_output
+            # Append the iter output
+            for b in range(len(iter_outputs)):
+                for k, v in iter_outputs[b].items():
+                    batch_outputs[b][k].append(v)
+        return batch_outputs
 
 
 def build_inst_sansa(
