@@ -74,7 +74,7 @@ def eval_instance(model: torch.nn.Module, args) -> dict:
             )
 
             max_instances = max(len(instances) for instances in instances_batch)
-            outputs = model(
+            outputs = model.inference(
                 image_batch,
                 prompt_dict,
                 max_iterations=int(1.5 * max_instances),
