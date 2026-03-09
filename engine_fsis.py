@@ -131,6 +131,7 @@ def train_one_epoch(
         batch_outputs = defaultdict(lambda: defaultdict(list))
         batch_metrics = defaultdict(list)
         memory_batch = defaultdict(dict)
+        matched_instances_per_batch = defaultdict(list)
         for current_iteration in range(max_iterations):
             iter_outputs, memory_batch = model.forward(
                     image_batch=images,
@@ -142,14 +143,21 @@ def train_one_epoch(
             for b in range(len(iter_outputs)):
                 for k, v in iter_outputs[b].items():
                     batch_outputs[b][k].append(v)
+            unmatched_instances_per_batch = {}
+            for j, instances in enumerate(instances_batch):
+                unmatched_indices = [k for k in range(len(instances)) if k not in matched_instances_per_batch[j]]
+                unmatched_instances_per_batch[j] = instances_batch[j][unmatched_indices]
             # Eval this iteration
-            iter_loss, iter_metrics = eval_batch(
+            iter_loss, iter_metrics, iter_matches = eval_batch(
                 pred_instances_batch=[output["masks"] for output in iter_outputs],
                 pred_scores_batch=[output["scores"] for output in iter_outputs],
-                gt_instances_batch=[instances.to(device) for instances in instances_batch],
-                exclude_first_k_shots=None,
+                gt_instances_batch=[instances.to(device) for instances in unmatched_instances_per_batch],
+                exclude_first_k_shots=0,
                 device=device
             )
+            for k, v in iter_matches.items():
+                if isinstance(v, list) and len(v) > 0:
+                    matched_instances_per_batch[k] += v
             # Decide whether we optimize at the iteration level or at the sequence level
             if optimize_iteration:
                 backprop_and_log(

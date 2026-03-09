@@ -14,6 +14,7 @@ def eval_batch(
         device: torch.device,
 ):
     batch_metrics = defaultdict(list)
+    batch_matches = defaultdict(list)
     total_loss = torch.tensor(0.0).to(device)
     for b in range(len(pred_instances_batch)):
         preds = pred_instances_batch[b]  # List of Tensors [H, W]
@@ -31,15 +32,17 @@ def eval_batch(
 
         # Very small matching threshold during learning, we want to match all predictions to GTs (even if low IoU) to
         # provide a learning signal. The loss function should handle the case of poor matches appropriately.
-        loss, metrics = loss_instances(
+        loss, metrics, matches = loss_instances(
             preds,
             gt_instances,
             scores,
             matching_iou=1e-6,
             objectness_factor=0.,
-            exclude_pred_ids=[i for i in range(exclude_first_k_shots)] if exclude_first_k_shots else None,
+            exclude_pred_ids=[i for i in range(exclude_first_k_shots)],
         )
         total_loss += loss
         for k, v in metrics.items():
             batch_metrics[k].append(v)
-    return total_loss, batch_metrics
+        for _, match_id, _ in matches:
+            batch_matches[b].append(match_id)
+    return total_loss, batch_metrics, batch_matches
