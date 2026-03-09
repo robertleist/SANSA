@@ -188,11 +188,10 @@ def train_one_epoch(
                     max_norm
                 )
                 detach_memory(memory_batch)
-            else:
-                # We sum the loss up
-                batch_loss += iter_loss
-                for k, v in iter_metrics:
-                    batch_metrics[k] += v if isinstance(v, list) else [v]
+            # We sum the loss up
+            batch_loss += iter_loss
+            for k, v in iter_metrics:
+                batch_metrics[k] += v if isinstance(v, list) else [v]
 
 
         # 3. Sequential Greedy Matching & Loss Calculation
@@ -203,7 +202,7 @@ def train_one_epoch(
                 batch_outputs[random_index_from_batch]["masks"],
                 instances_batch[random_index_from_batch].to(device),
                 images[random_index_from_batch],
-                i + 10_000,
+                global_step,
             )
 
 
