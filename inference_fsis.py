@@ -82,8 +82,8 @@ def eval_instance(model: torch.nn.Module, args) -> dict:
 
         # 2. Prepare Predictions for Metric
         # Logic: Convert logits to binary masks [N, H, W]
-        pred_masks = (outputs[0]["masks"].sigmoid() > 0.5).bool()
-        pred_scores = outputs[0]["scores"]
+        pred_masks = (torch.stack(outputs[0]["masks"], 0).sigmoid() > 0.5).bool()
+        pred_scores = torch.stack(outputs[0]["scores"], 0)
         # In LVIS eval, every pred for a sample usually shares the image's category_id
         # based on your previous script's logic
         pred_labels = torch.full((pred_masks.shape[0],), int(cat_ids[0]), device=args.device)
