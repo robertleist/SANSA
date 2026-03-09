@@ -151,7 +151,7 @@ def train_one_epoch(
             iter_loss, iter_metrics, iter_matches = eval_batch(
                 pred_instances_batch=[output["masks"] for output in iter_outputs],
                 pred_scores_batch=[output["scores"] for output in iter_outputs],
-                gt_instances_batch=[instances.to(device) for instances in unmatched_instances_per_batch],
+                gt_instances_batch=[instances.to(device) for instances in unmatched_instances_per_batch.values()],
                 exclude_first_k_shots=0,
                 device=device
             )
