@@ -8,13 +8,11 @@ import mlflow
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.nn import Module
 from torch.optim import Optimizer
 
 import util.misc as utils
 from eval_fsis import eval_batch
 from models.sansa.inst_sansa import InstanceSANSA
-from util.losses import loss_instances  # Assume this handles Dice/BCE for matched pairs
 from util.promptable_utils import build_prompt_dict_fsis
 
 
@@ -23,9 +21,6 @@ def backprop_and_log(
         loss,
         model,
         lr_scheduler,
-        metric_logger,
-        metrics,
-        step,
         max_norm: float = 0.0,
 ):
     optimizer.zero_grad(set_to_none=True)
@@ -41,16 +36,20 @@ def backprop_and_log(
     if lr_scheduler is not None:
         lr_scheduler.step()
 
+    return grad_total_norm
+
+
+def log_metrics(metrics, step, metric_logger, lr, grad_total_norm, loss):
     # Logging
     avg_metrics = {k: np.average(v) for k, v in metrics.items()}
-    metric_logger.update(loss=loss.item())
+    metric_logger.update(loss=loss)
     metric_logger.update(**avg_metrics)
-    metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+    metric_logger.update(lr=lr)
     metric_logger.update(grad_norm=grad_total_norm)
-    mlflow.log_metric("loss", loss.item(), step=step)
+    mlflow.log_metric("loss", loss, step=step)
     mlflow.log_metrics(avg_metrics, step=step)
     mlflow.log_metrics({
-        "lr": optimizer.param_groups[0]["lr"],
+        "lr": lr,
         "grad_norm": grad_total_norm,
     }, step=step)
 
@@ -126,7 +125,6 @@ def train_one_epoch(
     best_score = np.inf
 
     for i, batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-        global_step = epoch * len(data_loader) + i
         # 1. Unpack LVIS Batch
         # images: [B, C, H, W], instances_batch: [B, N_instances, H, W]
         images = batch['image'].to(device)
@@ -136,6 +134,7 @@ def train_one_epoch(
         # Max iterations must be at least the number of instances of the most
         mlflow.log_metric("num_instances", max(len(masks) for masks in instances_batch), step=global_step)
         max_iterations = min(50, int(1.3 * max(len(masks) for masks in instances_batch)))
+        global_step = epoch * len(data_loader) + i
         prompt_dict = build_prompt_dict_fsis(
             instances_batch,
             args.prompt,
@@ -181,14 +180,11 @@ def train_one_epoch(
             # Decide whether we optimize at the iteration level or at the sequence level
             if optimize_iteration:
                 # Causes error: "Trying to backward through the graph a second time"
-                backprop_and_log(
+                grad_total_norm = backprop_and_log(
                     optimizer,
                     iter_loss,
                     model,
                     lr_scheduler,
-                    metric_logger,
-                    iter_metrics,
-                    global_step + current_iteration,
                     max_norm
                 )
                 detach_memory(memory_batch)
@@ -216,16 +212,21 @@ def train_one_epoch(
             sys.exit(1)
         if not optimize_iteration:
             # We optimize the sequence
-            backprop_and_log(
+            grad_total_norm = backprop_and_log(
                 optimizer,
                 batch_loss,
                 model,
                 lr_scheduler,
-                metric_logger,
-                batch_metrics,
-                global_step,
                 max_norm
             )
+        log_metrics(
+            batch_metrics,
+            global_step,
+            metric_logger,
+            optimizer.param_groups[0]["lr"],
+            grad_total_norm,
+            batch_loss.item()
+        )
 
 
     metric_logger.synchronize_between_processes()
