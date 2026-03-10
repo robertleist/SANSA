@@ -178,8 +178,8 @@ def train_one_epoch(
                 if isinstance(v, list) and len(v) > 0:
                     matched_instances_per_batch[k] += v
             # Decide whether we optimize at the iteration level or at the sequence level
-            if optimize_iteration:
-                # Causes error: "Trying to backward through the graph a second time"
+            if optimize_iteration and current_iteration >= args.shots:
+                # Only backpropagate on unprompted runs
                 grad_total_norm = backprop_and_log(
                     optimizer,
                     iter_loss,
