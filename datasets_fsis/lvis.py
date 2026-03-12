@@ -122,19 +122,23 @@ class DatasetLVIS(Dataset):
         return sorted(list(img_names))
 
     def get_mask(self, segm, image_size):
+        # image_size in (H, W)
         if isinstance(segm, list):
-            mask = polygons_to_bitmask([np.asarray(p) for p in segm], *image_size[::-1])
+            mask = polygons_to_bitmask([np.asarray(p) for p in segm], height=image_size[1], width=image_size[0]).T
         elif isinstance(segm, dict):
             mask = mask_util.decode(segm)
         else:
-            mask = np.zeros(image_size[::-1])
+            mask = np.zeros(image_size)
+        if mask.shape[:2] != image_size:
+            print(f"Mask swapped! {mask.shape} != {image_size}")
+            mask = mask.T
         return torch.from_numpy(mask)
 
     def load_image_and_instances(self, img_name):
         # Find all annotations for this image across all categories
         img_path = os.path.join(self.base_path, img_name)
         image = Image.open(img_path).convert('RGB')
-        org_size = image.size
+        org_size = image.size[::-1]
 
         all_masks = []
         # Search classwise dict for this image's entries
