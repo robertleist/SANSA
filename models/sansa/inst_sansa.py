@@ -325,6 +325,6 @@ def build_inst_sansa(
 
     # freeze everything except adapters
     for name, p in model.named_parameters():
-        p.requires_grad = ("adapter" in name)
+        p.requires_grad = ("memory" in name)
 
     return model
