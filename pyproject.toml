@@ -7,7 +7,10 @@ dependencies = [
     "faster-coco-eval>=1.7.2",
     "lvis>=0.5.3",
     "mlflow>=3.10.0",
+    "plotly>=6.6.0",
     "pycocotools>=2.0.11",
     "scipy-stubs~=1.15.3",
+    "timm>=1.0.25",
     "torchmetrics>=1.8.2",
+    "transformers>=5.3.0",
 ]
