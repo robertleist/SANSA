@@ -101,7 +101,7 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('SANSA training', parents=[opts.get_args_parser()])
+    parser = argparse.ArgumentParser('SANSA training', parents=[opts.get_args_parser_fss()])
     args = parser.parse_args()
     args.output_dir = os.path.join(args.output_dir, args.name_exp)
 

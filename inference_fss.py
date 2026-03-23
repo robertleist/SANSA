@@ -97,7 +97,7 @@ def eval_fss(model: torch.nn.Module, args: argparse.Namespace) -> float:
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('SANSA evaluation script', parents=[opts.get_args_parser()])
+    parser = argparse.ArgumentParser('SANSA evaluation script', parents=[opts.get_args_parser_fss()])
     args = parser.parse_args()
     args.output_dir = join(args.output_dir, args.name_exp)
     main(args)
