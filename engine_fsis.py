@@ -107,6 +107,111 @@ def log_an_image(
     )
 
 
+def _forward_and_optimize_iterations(
+        model: InstanceSANSA,
+        images: torch.Tensor,
+        instances_batch: list,
+        prompt_dict: dict,
+        max_iterations: int,
+        optimizer: Optimizer,
+        lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler],
+        max_norm: float,
+        device: torch.device,
+        optimize_iteration: bool,
+        args: object,
+) -> tuple:
+    """
+    Phase 1: Execute forward passes through iterations with optional iteration-level optimization.
+    
+    Returns:
+        Tuple of (batch_loss, batch_outputs, batch_metrics, memory_batch, matched_instances_per_batch, final_grad_norm)
+    """
+    batch_loss = torch.tensor(0.0, device=device)
+    batch_outputs = defaultdict(lambda: defaultdict(list))
+    batch_metrics = defaultdict(list)
+    memory_batch = defaultdict(dict)
+    matched_instances_per_batch = defaultdict(list)
+    grad_total_norm = 0.0
+
+    for current_iteration in range(max_iterations):
+        # Forward pass
+        iter_outputs, memory_batch = model.forward(
+            image_batch=images,
+            prompt_batch=prompt_dict,
+            memory_batch=memory_batch,
+            current_iteration=current_iteration,
+        )
+        
+        # Append iteration outputs to batch collection
+        for b in range(len(iter_outputs)):
+            for k, v in iter_outputs[b].items():
+                batch_outputs[b][k].append(v)
+        
+        # Compute unmatched instances for loss calculation
+        unmatched_instances_per_batch = {}
+        for j, instances in enumerate(instances_batch):
+            unmatched_indices = [k for k in range(len(instances)) if k not in matched_instances_per_batch[j]]
+            unmatched_instances_per_batch[j] = instances_batch[j][unmatched_indices]
+        
+        # Evaluate this iteration
+        iter_loss, iter_metrics, iter_matches = eval_batch(
+            pred_instances_batch=[output["masks"] for output in iter_outputs],
+            pred_scores_batch=[output["scores"] for output in iter_outputs],
+            gt_instances_batch=[instances.to(device) for instances in unmatched_instances_per_batch.values()],
+            exclude_first_k_shots=0,
+            device=device
+        )
+        
+        # Track matched instances
+        for k, v in iter_matches.items():
+            if isinstance(v, list) and len(v) > 0:
+                matched_instances_per_batch[k] += v
+        
+        # Aggregate metrics
+        for k, v in iter_metrics.items():
+            batch_metrics[k] += v if isinstance(v, list) else [v]
+        
+        # OPTIMIZATION STRATEGY: Iteration-level backprop (only on unprompted iterations)
+        if optimize_iteration and current_iteration >= args.shots:
+            grad_total_norm = backprop_and_log(
+                optimizer,
+                iter_loss,
+                model,
+                lr_scheduler,
+                max_norm
+            )
+        # Detach memory to prevent deep computation graphs across iterations
+        detach_memory(memory_batch)
+        
+        # Accumulate loss for potential sequence-level optimization
+        batch_loss = batch_loss + iter_loss
+
+    return batch_loss, batch_outputs, batch_metrics, memory_batch, matched_instances_per_batch, grad_total_norm
+
+
+def _apply_sequence_optimization(
+        batch_loss: torch.Tensor,
+        model: InstanceSANSA,
+        optimizer: Optimizer,
+        lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler],
+        max_norm: float,
+) -> float:
+    """
+    Phase 3: Apply sequence-level optimization (single backward pass on accumulated loss).
+    
+    Returns:
+        Gradient norm from the backward pass
+    """
+    grad_total_norm = backprop_and_log(
+        optimizer,
+        batch_loss,
+        model,
+        lr_scheduler,
+        max_norm
+    )
+    return grad_total_norm
+
+
 def train_one_epoch(
         model: InstanceSANSA,
         data_loader: Iterable,
@@ -126,75 +231,38 @@ def train_one_epoch(
 
     for i, batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         global_step = epoch * len(data_loader) + i
-        # 1. Unpack LVIS Batch
-        # images: [B, C, H, W], instances_batch: [B, N_instances, H, W]
+        
+        # ===== SETUP =====
         images = batch['image'].to(device)
-        instances_batch = batch['instances']  # List or padded tensor of masks
+        instances_batch = batch['instances']
         og_sizes = batch['org_size']
 
-        # Max iterations must be at least the number of instances of the most
         mlflow.log_metric("num_instances", max(len(masks) for masks in instances_batch), step=global_step)
         max_iterations = min(50, int(1.3 * max(len(masks) for masks in instances_batch)))
         prompt_dict = build_prompt_dict_fsis(
             instances_batch,
             args.prompt,
-            # Controls the type of prompt. In this case, it is an exemplar (mask). Could also be point or box.
-            num_support_prompts=args.shots,  # Controls how many instances are supported by prompts.
+            num_support_prompts=args.shots,
             train_mode=True,
             device=model.device
         )
 
-        # 2. Forward Pass
-        # We run the iterative discovery loop inside the model
-        batch_loss = torch.tensor(0.0, device=device)
-        batch_outputs = defaultdict(lambda: defaultdict(list))
-        batch_metrics = defaultdict(list)
-        memory_batch = defaultdict(dict)
-        matched_instances_per_batch = defaultdict(list)
-        for current_iteration in range(max_iterations):
-            iter_outputs, memory_batch = model.forward(
-                    image_batch=images,
-                    prompt_batch=prompt_dict,
-                    memory_batch=memory_batch,
-                    current_iteration=current_iteration,
-                )
-            # Append the iter output
-            for b in range(len(iter_outputs)):
-                for k, v in iter_outputs[b].items():
-                    batch_outputs[b][k].append(v)
-            unmatched_instances_per_batch = {}
-            for j, instances in enumerate(instances_batch):
-                unmatched_indices = [k for k in range(len(instances)) if k not in matched_instances_per_batch[j]]
-                unmatched_instances_per_batch[j] = instances_batch[j][unmatched_indices]
-            # Eval this iteration
-            iter_loss, iter_metrics, iter_matches = eval_batch(
-                pred_instances_batch=[output["masks"] for output in iter_outputs],
-                pred_scores_batch=[output["scores"] for output in iter_outputs],
-                gt_instances_batch=[instances.to(device) for instances in unmatched_instances_per_batch.values()],
-                exclude_first_k_shots=0,
-                device=device
-            )
-            for k, v in iter_matches.items():
-                if isinstance(v, list) and len(v) > 0:
-                    matched_instances_per_batch[k] += v
-            # Decide whether we optimize at the iteration level or at the sequence level
-            if optimize_iteration and current_iteration >= args.shots:
-                # Only backpropagate on unprompted runs
-                grad_total_norm = backprop_and_log(
-                    optimizer,
-                    iter_loss,
-                    model,
-                    lr_scheduler,
-                    max_norm
-                )
-                detach_memory(memory_batch)
-            # We sum the loss up
-            batch_loss += iter_loss
-            for k, v in iter_metrics.items():
-                batch_metrics[k] += v if isinstance(v, list) else [v]
+        # ===== PHASE 1: Forward passes with optional iteration-level optimization =====
+        batch_loss, batch_outputs, batch_metrics, memory_batch, matched_instances_per_batch, grad_total_norm = _forward_and_optimize_iterations(
+            model=model,
+            images=images,
+            instances_batch=instances_batch,
+            prompt_dict=prompt_dict,
+            max_iterations=max_iterations,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+            max_norm=max_norm,
+            device=device,
+            optimize_iteration=optimize_iteration,
+            args=args,
+        )
 
-
-        # 3. Sequential Greedy Matching & Loss Calculation
+        # ===== PHASE 2: Logging and validation =====
         if batch_loss.item() < best_score:
             best_score = batch_loss.item()
             random_index_from_batch = random.choice(range(len(images)))
@@ -205,19 +273,21 @@ def train_one_epoch(
                 global_step,
             )
 
-
         if not math.isfinite(batch_loss.item()):
             print(f"Loss is {batch_loss.item()}, stopping training")
             sys.exit(1)
+        
+        # ===== PHASE 3: Sequence-level optimization (if not already done per-iteration) =====
         if not optimize_iteration:
-            # We optimize the sequence
-            grad_total_norm = backprop_and_log(
-                optimizer,
+            grad_total_norm = _apply_sequence_optimization(
                 batch_loss,
                 model,
+                optimizer,
                 lr_scheduler,
                 max_norm
             )
+        
+        # Log accumulated metrics
         log_metrics(
             batch_metrics,
             global_step,
@@ -226,7 +296,6 @@ def train_one_epoch(
             grad_total_norm,
             batch_loss.item()
         )
-
 
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
