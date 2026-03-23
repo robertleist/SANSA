@@ -270,7 +270,14 @@ def train_one_epoch(
         og_sizes = batch['org_size']
 
         mlflow.log_metric("num_instances", max(len(masks) for masks in instances_batch), step=global_step)
-        max_iterations = min(50, int(1.3 * max(len(masks) for masks in instances_batch)))
+        # More conservative iteration limit to prevent OOM with many instances
+        max_instances = max(len(masks) for masks in instances_batch)
+        if max_instances > 20:
+            # For high instance counts, use fewer iterations to save memory
+            max_iterations = min(20, int(0.8 * max_instances))
+            print(f"Warning: High instance count ({max_instances}), limiting iterations to {max_iterations} to prevent OOM")
+        else:
+            max_iterations = min(30, int(1.2 * max_instances))
         prompt_dict = build_prompt_dict_fsis(
             instances_batch,
             args.prompt,
