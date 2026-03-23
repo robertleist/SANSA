@@ -156,14 +156,7 @@ def hungarian_matching(
     return final_matches, unmatched_preds, unmatched_gts
 
 
-def dice_loss(inputs, targets, smooth=1.0):
-    inputs = inputs.view(-1)
-    targets = targets.view(-1)
 
-    intersection = (inputs * targets).sum()
-    dice = (2. * intersection + smooth) / (inputs.sum() + targets.sum() + smooth)
-
-    return 1 - dice
 
 
 def combined_instance_loss(
@@ -206,8 +199,9 @@ def loss_instances(
     FP = len(FP_indices)  # Should always be 0
     FN = len(FN_indices)
 
-    # Regularization
-    total_loss += regularize_overlap(preds)
+    # Regularization: penalize overlapping predictions
+    # Increase weight if model predicts too many overlaps (should be rare)
+    total_loss += regularize_overlap(preds, weight=0.1)
 
     # --- 2. MATCHED LOSS (True Positives) ---
     # Goal: Refine the shape of correctly identified instances
@@ -228,7 +222,8 @@ def loss_instances(
             gt_masks_matched = torch.stack([gt_masks[i] for i in g_indices]).float()
 
             fit = goodness_of_fit(p_masks, gt_masks_matched)
-            total_loss += fit["dice"].sum()  # Sum across matched instances
+            # Use dice_loss: higher when predictions are BAD, lower when GOOD
+            total_loss += fit["dice_loss"].sum()  # Sum across matched instances
             
             # Add objectness loss for matched instances
             if len(scores_matched) > 0:
@@ -255,6 +250,18 @@ def goodness_of_fit(
         gts: torch.Tensor,
         smooth: float = 1e-6,
 ):
+    """Compute Dice and IoU losses for instance predictions.
+    
+    Args:
+        preds: [N, ...] predicted masks (values in [0,1] for sigmoid'd outputs)
+        gts: [N, ...] ground truth binary masks
+        smooth: smoothing factor for numerical stability
+    
+    Returns:
+        dict with loss tensors (lower = better):
+          - "dice_loss": [N] Dice loss per instance (0=perfect, ~1=worst)
+          - "iou_loss": [N] IoU loss per instance (0=perfect, ~1=worst)
+    """
     assert len(preds) == len(gts), f"Cannot compute goodness of fit of different length for preds and GT: {len(preds)} != {len(gts)}"
     n_instances = len(preds)
     preds = preds.view(n_instances, -1)
@@ -263,12 +270,18 @@ def goodness_of_fit(
     intersection = torch.sum(torch.mul(preds, gts), dim=1)
     preds_union = torch.sum(preds, dim=1)
     gts_union = torch.sum(gts, dim=1)
-    dice = (2. * intersection + smooth) / (preds_union + gts_union + smooth)
-    iou = (intersection + smooth )/ (preds_union + gts_union + smooth)
+    
+    # Compute metrics (higher = better)
+    dice_metric = (2. * intersection + smooth) / (preds_union + gts_union + smooth)
+    iou_metric = (intersection + smooth) / (preds_union + gts_union - intersection + smooth)
+    
+    # Convert to losses (lower = better)
+    dice_loss = 1.0 - dice_metric
+    iou_loss = 1.0 - iou_metric
 
     return {
-        "dice": dice,
-        "iou": iou,
+        "dice_loss": dice_loss,
+        "iou_loss": iou_loss,
     }
 
 
@@ -283,37 +296,43 @@ def regularize_count(
 
 def regularize_overlap(
         predicted_masks: torch.Tensor,
+        weight: float = 1.0,
         smooth: float = 1e-6,
 ):
-    """ Regularize the overlap between predicted masks. Forces the model to make novel predictions. """
+    """Regularize overlap between predicted masks to encourage instance separation.
+    
+    Args:
+        predicted_masks: [N, H, W] predicted masks (should be sigmoid'd, values in [0,1])
+        weight: scaling factor for the loss (default 1.0, increase to penalize overlaps more)
+        smooth: numerical stability factor
+    
+    Returns:
+        Scalar loss tensor (penalizes overlapping masks, 0=no overlap, >0=overlap)
+    """
     if predicted_masks.shape[0] < 2:
         return torch.tensor(0.0, device=predicted_masks.device)
 
-    # 1. Compute the global union: \cup \hat{f}
-    # For soft masks, the union is often approximated by the element-wise max
-    global_union = torch.max(predicted_masks, dim=0)[0]
-    global_union_area = torch.sum(global_union) + smooth
-
-    total_intersection_sum = 0.0
-    num_instances = predicted_masks.shape[0]
-
-    # 2. Iterate through each instance E_j
-    for j in range(num_instances):
-        e_j = predicted_masks[j]
-
-        # 3. Compute the union of all other instances: \cup_{E_l \setminus E_j}
-        # We mask out the current index and take the max of the rest
-        others = torch.cat([predicted_masks[:j], predicted_masks[j + 1:]], dim=0)
-        union_others = torch.max(others, dim=0)[0]
-
-        # 4. Compute intersection: E_j \cap (union_others)
-        # For soft masks, intersection is element-wise multiplication
-        intersection = e_j * union_others
-
-        # 5. Sum the area of the intersection
-        total_intersection_sum += torch.sum(intersection)
-
-    # 6. Final calculation: theta * (sum of intersections / global union area)
-    loss = (total_intersection_sum / global_union_area)
-
-    return loss
+    # Compute pairwise overlaps between all instance pairs
+    n_instances = predicted_masks.shape[0]
+    overlap_loss = torch.tensor(0.0, device=predicted_masks.device)
+    
+    for i in range(n_instances):
+        for j in range(i + 1, n_instances):
+            mask_i = predicted_masks[i].flatten()
+            mask_j = predicted_masks[j].flatten()
+            
+            # Compute intersection: overlapping area
+            intersection = torch.sum(mask_i * mask_j)
+            # Compute union: area covered by at least one mask
+            union = torch.sum(torch.clamp(mask_i + mask_j, max=1.0))
+            
+            # Overlap ratio: high when masks overlap significantly
+            # Should be low (near 0) for well-separated instances
+            overlap = intersection / (union + smooth)
+            overlap_loss = overlap_loss + overlap
+    
+    # Average over all pairs and scale by weight
+    num_pairs = max(1, n_instances * (n_instances - 1) / 2)
+    overlap_loss = (overlap_loss / num_pairs) * weight
+    
+    return overlap_loss
