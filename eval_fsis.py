@@ -21,12 +21,17 @@ def eval_batch(
         scores = pred_scores_batch[b] # List of Tensors [1]
         gt_instances = gt_instances_batch[b].to(device)  # [N_gt, H, W]
 
-        preds = F.interpolate(
-            preds,
-            size=gt_instances.shape[-2:],
-            mode='bilinear',
-            align_corners=False,
-        )
+        # Stack list of masks into [N, H, W] tensor for interpolation
+        if len(preds) > 0:
+            preds = torch.stack(preds).unsqueeze(1)  # [N, 1, H, W]
+            preds = F.interpolate(
+                preds,
+                size=gt_instances.shape[-2:],
+                mode='bilinear',
+                align_corners=False,
+            )
+            preds = preds.squeeze(1)  # [N, H, W]
+        scores = torch.stack(scores).squeeze(-1)  # [N]
         if len(preds) == 0 or len(gt_instances) == 0:
             continue
 

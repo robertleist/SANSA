@@ -212,23 +212,36 @@ def loss_instances(
     # --- 2. MATCHED LOSS (True Positives) ---
     # Goal: Refine the shape of correctly identified instances
     if len(matches) > 0:
-        p_indices, g_indices = [], []
-        if exclude_pred_ids:
-            for p_idx, g_idx, _ in matches:
-                # Filter matches; used to filter out prompted predictions
-                if p_idx in exclude_pred_ids:
-                    continue
-                p_indices.append(p_idx)
-                g_indices.append(g_idx)
-        else:
-            p_indices, g_indices, _ = matches
-        p_masks = preds[p_indices]
-        gt_masks = gt_masks[g_indices].float().view_as(p_masks)
+        p_indices, g_indices, scores_matched = [], [], []
+        for p_idx, g_idx, _ in matches:
+            # Filter matches; used to filter out prompted predictions
+            if exclude_pred_ids and p_idx in exclude_pred_ids:
+                continue
+            p_indices.append(p_idx)
+            g_indices.append(g_idx)
+            # Track objectness scores for matched instances
+            if p_idx < len(scores):
+                scores_matched.append(scores[p_idx])
+        
+        if len(p_indices) > 0:
+            p_masks = torch.stack([preds[i] for i in p_indices])
+            gt_masks_matched = torch.stack([gt_masks[i] for i in g_indices]).float()
 
-        fit = goodness_of_fit(p_masks, gt_masks)
-        total_loss += fit["dice"]
+            fit = goodness_of_fit(p_masks, gt_masks_matched)
+            total_loss += fit["dice"].sum()  # Sum across matched instances
+            
+            # Add objectness loss for matched instances
+            if len(scores_matched) > 0:
+                scores_matched = torch.stack(scores_matched).squeeze(-1)  # [N_matched]
+                objectness_loss = F.binary_cross_entropy(scores_matched, torch.ones_like(scores_matched))
+                total_loss += objectness_loss
 
     normalize = TP + FN - (len(exclude_pred_ids) if exclude_pred_ids is not None else 0)
+    
+    # Guard against division by zero
+    if normalize <= 0:
+        normalize = 1
+    
     metrics = {k: v / normalize for k, v in metrics.items()}
 
     # Normalize by the minimum of the missed or additional predictions.
