@@ -37,7 +37,6 @@ def eval_batch(
             gt_instances,
             scores,
             matching_iou=1e-6,
-            objectness_factor=0.,
             exclude_pred_ids=[i for i in range(exclude_first_k_shots)],
         )
         total_loss += loss
