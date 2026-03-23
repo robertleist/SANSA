@@ -121,5 +121,8 @@ def get_args_parser_fsis() -> argparse.ArgumentParser:
     add_optimization_args(parser)
     add_logging_args(parser)
     add_inference_args(parser)
+
+    parser.add_argument("--optimize_iteration", action="store_true", default=False, 
+                        help="Whether to optimize each iteration during training (for FSIS).")
     
     return parser
