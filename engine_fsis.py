@@ -209,8 +209,12 @@ def _forward_and_optimize_iterations(
                 lr_scheduler,
                 max_norm
             )
+            # Detach loss tensor to free computation graph memory
+            iter_loss = iter_loss.detach()
         # Detach memory to prevent deep computation graphs across iterations
         detach_memory(memory_batch, max_memory_iterations=3)  # Keep only last 3 iterations
+        # Force GPU memory cleanup
+        torch.cuda.empty_cache()
         
         # Accumulate loss for potential sequence-level optimization
         batch_loss = batch_loss + iter_loss
