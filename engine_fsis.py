@@ -277,7 +277,7 @@ def train_one_epoch(
             sys.exit(1)
         
         # ===== PHASE 3: Sequence-level optimization (if not already done per-iteration) =====
-        if not optimize_iteration:
+        if not args.optimize_iteration:
             grad_total_norm = _apply_sequence_optimization(
                 batch_loss,
                 model,
