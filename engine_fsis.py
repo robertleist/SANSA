@@ -23,19 +23,22 @@ def backprop_and_log(
         lr_scheduler,
         max_norm: float = 0.0,
 ):
+    # CRITICAL: Check if loss requires gradients
+    if not loss.requires_grad:
+        print(f"ERROR: Loss does not require gradients! Loss value: {loss.item():.6f}")
+        print("This indicates a bug in the loss computation or gradient flow.")
+        print("Skipping backprop to avoid training failure, but this should be investigated.")
+        return 0.0
+    
     optimizer.zero_grad(set_to_none=True)
-    if loss.requires_grad:
-        loss.backward()
-
-        grad_total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-        optimizer.step()
-    else:
-        grad_total_norm = 0.0
-        print("Skipping backward: No gradients to compute for this batch.")
-
+    loss.backward()
+    
+    grad_total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+    optimizer.step()
+    
     if lr_scheduler is not None:
         lr_scheduler.step()
-
+    
     return grad_total_norm
 
 
