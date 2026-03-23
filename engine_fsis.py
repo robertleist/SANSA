@@ -171,8 +171,8 @@ def _forward_and_optimize_iterations(
         for k, v in iter_metrics.items():
             batch_metrics[k] += v if isinstance(v, list) else [v]
         
-        # OPTIMIZATION STRATEGY: Iteration-level backprop (only on unprompted iterations)
-        if optimize_iteration and current_iteration >= args.shots:
+        # OPTIMIZATION STRATEGY: Iteration-level backprop
+        if optimize_iteration:
             grad_total_norm = backprop_and_log(
                 optimizer,
                 iter_loss,
