@@ -526,11 +526,13 @@ class SAM2Base(torch.nn.Module):
             # Retrieve the memories encoded with the maskmem backbone
             to_cat_memory, to_cat_memory_pos_embed = [], []
             t_pos_and_prevs = []
-            t_pos_and_prevs.append((0, memory_bank[0]))
+            # Use the earliest available memory as reference (should be 0 in normal cases)
+            earliest_frame_idx = min(memory_bank.keys()) if memory_bank else 0
+            t_pos_and_prevs.append((0, memory_bank.get(earliest_frame_idx, None)))
             for t_pos in range(1, self.num_maskmem):
                 t_rel = self.num_maskmem - t_pos  # how many frames before current frame
                 prev_frame_idx = frame_idx - t_rel
-                if prev_frame_idx == 0:
+                if prev_frame_idx == earliest_frame_idx:
                     t_pos_and_prevs.append((t_pos, None))
                 else:
                     t_pos_and_prevs.append((t_pos, memory_bank.get(prev_frame_idx, None)))
@@ -550,11 +552,12 @@ class SAM2Base(torch.nn.Module):
             if self.use_obj_ptrs_in_encoder:
                 max_obj_ptrs_in_encoder = min(num_frames, self.max_obj_ptrs_in_encoder)
                 # Add up to (max_obj_ptrs_in_encoder - 1) non-conditioning frames before current frame
-                pos_and_ptrs= [(frame_idx, memory_bank[0]["obj_ptr"])]
+                earliest_frame_idx = min(memory_bank.keys()) if memory_bank else 0
+                pos_and_ptrs= [(frame_idx, memory_bank[earliest_frame_idx]["obj_ptr"])]
                 for t_diff in range(1, max_obj_ptrs_in_encoder):
                     t = frame_idx - t_diff
-                    if t <= 0 or t >= num_frames:
-                        # NOTE: changed from 't < 0' to 't <= 0' to avoid repeating the zero
+                    if t <= earliest_frame_idx or t >= num_frames:
+                        # NOTE: changed from 't < 0' to 't <= earliest_frame_idx' to avoid repeating the earliest
                         break
                     out = memory_bank.get(t, None)
                     if out is not None:

@@ -67,11 +67,22 @@ def detach_memory(memory_batch: dict[int, dict[int, dict[str, torch.Tensor]]], m
     for i, mem_bank in memory_batch.items():
         # Get all iteration keys, sort them
         iteration_keys = sorted(mem_bank.keys())
-        # Keep only the most recent max_memory_iterations
-        if len(iteration_keys) > max_memory_iterations:
-            keys_to_remove = iteration_keys[:-max_memory_iterations]
-            for key in keys_to_remove:
-                del mem_bank[key]
+        if not iteration_keys:
+            continue  # No memories to process
+        
+        # Always keep the earliest iteration (smallest key) to maintain model stability
+        earliest_key = iteration_keys[0]
+        # Keep only the most recent max_memory_iterations, but ensure earliest is included
+        recent_keys = [k for k in iteration_keys if k >= earliest_key]
+        if len(recent_keys) > max_memory_iterations:
+            # Keep earliest + most recent ones
+            keys_to_keep = [earliest_key] + recent_keys[- (max_memory_iterations - 1):]
+            keys_to_remove = set(recent_keys) - set(keys_to_keep)
+        else:
+            keys_to_remove = set()
+        
+        for key in keys_to_remove:
+            del mem_bank[key]
         
         # Detach remaining tensors (keep on GPU for next forward pass)
         for j, mem_entry in mem_bank.items():
