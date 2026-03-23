@@ -62,9 +62,9 @@ def detach_memory(memory_batch: dict[int, dict[int, dict[str, torch.Tensor]]]):
         for j, mem_entry in mem_bank.items():
             for k, mem_tensors in mem_entry.items():
                 if isinstance(mem_tensors, torch.Tensor):
-                    memory_batch[i][j][k] = mem_tensors.detach()
+                    memory_batch[i][j][k] = mem_tensors.detach().cpu()
                 elif isinstance(mem_tensors, list):
-                    memory_batch[i][j][k] = [list_tensor.detach() for list_tensor in mem_tensors]
+                    memory_batch[i][j][k] = [list_tensor.detach().cpu() for list_tensor in mem_tensors]
     return memory_batch
 
 
@@ -183,6 +183,8 @@ def _forward_and_optimize_iterations(
                 lr_scheduler,
                 max_norm
             )
+            # Free GPU memory after each iteration optimization
+            torch.cuda.empty_cache()
         # Detach memory to prevent deep computation graphs across iterations
         detach_memory(memory_batch)
         
