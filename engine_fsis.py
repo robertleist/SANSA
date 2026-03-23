@@ -57,14 +57,29 @@ def log_metrics(metrics, step, metric_logger, lr, grad_total_norm, loss):
     }, step=step)
 
 
-def detach_memory(memory_batch: dict[int, dict[int, dict[str, torch.Tensor]]]):
+def detach_memory(memory_batch: dict[int, dict[int, dict[str, torch.Tensor]]], max_memory_iterations: int = 5):
+    """Detach memory tensors and limit memory bank size to prevent OOM.
+    
+    Args:
+        memory_batch: Memory bank to detach and limit
+        max_memory_iterations: Maximum number of recent iterations to keep per batch item
+    """
     for i, mem_bank in memory_batch.items():
+        # Get all iteration keys, sort them
+        iteration_keys = sorted(mem_bank.keys())
+        # Keep only the most recent max_memory_iterations
+        if len(iteration_keys) > max_memory_iterations:
+            keys_to_remove = iteration_keys[:-max_memory_iterations]
+            for key in keys_to_remove:
+                del mem_bank[key]
+        
+        # Detach remaining tensors (keep on GPU for next forward pass)
         for j, mem_entry in mem_bank.items():
             for k, mem_tensors in mem_entry.items():
                 if isinstance(mem_tensors, torch.Tensor):
-                    memory_batch[i][j][k] = mem_tensors.detach().cpu()
+                    mem_bank[j][k] = mem_tensors.detach()
                 elif isinstance(mem_tensors, list):
-                    memory_batch[i][j][k] = [list_tensor.detach().cpu() for list_tensor in mem_tensors]
+                    mem_bank[j][k] = [list_tensor.detach() for list_tensor in mem_tensors]
     return memory_batch
 
 
@@ -183,10 +198,8 @@ def _forward_and_optimize_iterations(
                 lr_scheduler,
                 max_norm
             )
-            # Free GPU memory after each iteration optimization
-            torch.cuda.empty_cache()
         # Detach memory to prevent deep computation graphs across iterations
-        detach_memory(memory_batch)
+        detach_memory(memory_batch, max_memory_iterations=3)  # Keep only last 3 iterations
         
         # Accumulate loss for potential sequence-level optimization
         batch_loss = batch_loss + iter_loss
