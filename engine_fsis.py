@@ -219,7 +219,6 @@ def train_one_epoch(
         device: torch.device,
         epoch: int,
         max_norm: float = 0.0,
-        optimize_iteration: bool = True,
         lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         args: Optional[object] = None,
 ) -> dict:
@@ -258,7 +257,7 @@ def train_one_epoch(
             lr_scheduler=lr_scheduler,
             max_norm=max_norm,
             device=device,
-            optimize_iteration=optimize_iteration,
+            optimize_iteration=args.optimize_iteration,
             args=args,
         )
 
