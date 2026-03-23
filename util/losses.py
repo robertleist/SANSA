@@ -192,39 +192,41 @@ def loss_instances(
         preds: list,
         gt_masks: torch.Tensor,
         scores: torch.Tensor,
-        matching_iou: float = 0.5,
-        dice_factor: float = 1.,
-        bce_factor: float = 1.,
-        objectness_factor: float = 1.,
+        matching_iou: float = 0.,
         exclude_pred_ids: list[int] = None,
 ):
     # 1. Get our assignments
     # Assuming hungarian_matching returns:
     # matches: list[(p_idx, g_idx)], unmatched_preds: list[p_idx], unmatched_gts: list[g_idx]
-    matches, FP_indices, FN_indices = hungarian_matching(preds, gt_masks, iou_threshold=0.0)
+    matches, FP_indices, FN_indices = hungarian_matching(preds, gt_masks, iou_threshold=matching_iou)
 
     total_loss = torch.tensor(0.0, device=gt_masks.device)
     metrics = {"loss_dice": 0., "loss_ce": 0., "loss_objectness": 0.}
     TP = len(matches)
     FP = len(FP_indices)  # Should always be 0
     FN = len(FN_indices)
-    # recall = TP / (TP + FN)
-    # objectness_factor += (1  - recall)  # Does this make sense? It is supposed to encourage the model to predict more objects, so when it starts to predict less objects this part gets amplified
+
+    # Regularization
+    total_loss += regularize_overlap(preds)
 
     # --- 2. MATCHED LOSS (True Positives) ---
     # Goal: Refine the shape of correctly identified instances
     if len(matches) > 0:
-        for p_idx, g_idx, _ in matches:
-            if p_idx in exclude_pred_ids:
-                continue
-            p_mask = preds[p_idx]
-            p_score = scores[p_idx]
-            gt_mask = gt_masks[g_idx].float().view_as(p_mask)
-            gt_score = torch.tensor(1.0, device=gt_mask.device)
+        p_indices, g_indices = [], []
+        if exclude_pred_ids:
+            for p_idx, g_idx, _ in matches:
+                # Filter matches; used to filter out prompted predictions
+                if p_idx in exclude_pred_ids:
+                    continue
+                p_indices.append(p_idx)
+                g_indices.append(g_idx)
+        else:
+            p_indices, g_indices, _ = matches
+        p_masks = preds[p_indices]
+        gt_masks = gt_masks[g_indices].float().view_as(p_masks)
 
-            total_loss += combined_instance_loss(
-                p_mask, p_score, gt_mask, gt_score,
-                metrics, dice_factor, bce_factor, objectness_factor)
+        fit = goodness_of_fit(p_masks, gt_masks)
+        total_loss += fit["dice"]
 
     normalize = TP + FN - (len(exclude_pred_ids) if exclude_pred_ids is not None else 0)
     metrics = {k: v / normalize for k, v in metrics.items()}
@@ -233,3 +235,72 @@ def loss_instances(
     # If we predict too many instances, we normalize by the number of actual instances
     # If we predict too few instances, we normalize by the number of predictions
     return total_loss / normalize, metrics, matches
+
+
+def goodness_of_fit(
+        preds: torch.Tensor,
+        gts: torch.Tensor,
+        smooth: float = 1e-6,
+):
+    assert len(preds) == len(gts), f"Cannot compute goodness of fit of different length for preds and GT: {len(preds)} != {len(gts)}"
+    n_instances = len(preds)
+    preds = preds.view(n_instances, -1)
+    gts = gts.view(n_instances, -1)
+
+    intersection = torch.sum(torch.mul(preds, gts), dim=1)
+    preds_union = torch.sum(preds, dim=1)
+    gts_union = torch.sum(gts, dim=1)
+    dice = (2. * intersection + smooth) / (preds_union + gts_union + smooth)
+    iou = (intersection + smooth )/ (preds_union + gts_union + smooth)
+
+    return {
+        "dice": dice,
+        "iou": iou,
+    }
+
+
+def regularize_count(
+        num_pred: int,
+        num_exemplars: int,
+        smooth: float = 1e-6,
+):
+    """ Regularize the number of predicted masks. Forces the model to make novel predictions. """
+    return num_exemplars / (num_pred + smooth)
+
+
+def regularize_overlap(
+        predicted_masks: torch.Tensor,
+        smooth: float = 1e-6,
+):
+    """ Regularize the overlap between predicted masks. Forces the model to make novel predictions. """
+    if predicted_masks.shape[0] < 2:
+        return torch.tensor(0.0, device=predicted_masks.device)
+
+    # 1. Compute the global union: \cup \hat{f}
+    # For soft masks, the union is often approximated by the element-wise max
+    global_union = torch.max(predicted_masks, dim=0)[0]
+    global_union_area = torch.sum(global_union) + smooth
+
+    total_intersection_sum = 0.0
+    num_instances = predicted_masks.shape[0]
+
+    # 2. Iterate through each instance E_j
+    for j in range(num_instances):
+        e_j = predicted_masks[j]
+
+        # 3. Compute the union of all other instances: \cup_{E_l \setminus E_j}
+        # We mask out the current index and take the max of the rest
+        others = torch.cat([predicted_masks[:j], predicted_masks[j + 1:]], dim=0)
+        union_others = torch.max(others, dim=0)[0]
+
+        # 4. Compute intersection: E_j \cap (union_others)
+        # For soft masks, intersection is element-wise multiplication
+        intersection = e_j * union_others
+
+        # 5. Sum the area of the intersection
+        total_intersection_sum += torch.sum(intersection)
+
+    # 6. Final calculation: theta * (sum of intersections / global union area)
+    loss = (total_intersection_sum / global_union_area)
+
+    return loss
