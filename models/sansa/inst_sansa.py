@@ -323,8 +323,8 @@ def build_inst_sansa(
     sam.load_state_dict(state_dict, strict=False)
     model = InstanceSANSA(sam=sam, device=torch.device(device))
 
-    # freeze everything except adapters
+    # freeze everything except adapters and memory components
     for name, p in model.named_parameters():
-        p.requires_grad = ("memory" in name)
+        p.requires_grad = ("memory" in name.lower() or "adapter" in name.lower())
 
     return model
