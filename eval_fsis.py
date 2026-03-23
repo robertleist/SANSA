@@ -27,7 +27,6 @@ def eval_batch(
             align_corners=False,
         )
         preds = preds.squeeze(1)  # [N, H, W]
-        scores = torch.stack(scores).squeeze(-1)  # [N]
         if len(preds) == 0 or len(gt_instances) == 0:
             continue
 
