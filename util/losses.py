@@ -197,7 +197,7 @@ def loss_instances(
     # Use a small epsilon to ensure gradients can flow even if all components are zero
     total_loss = torch.tensor(1e-8, device=gt_masks.device, requires_grad=True)
     metrics = {"loss_dice": 0., "loss_ce": 0., "loss_objectness": 0.}
-    TP = len(matches)
+    TP = 0  # Will be set to effective_tp
     FP = len(FP_indices)  # Should always be 0
     FN = len(FN_indices)
 
@@ -212,31 +212,49 @@ def loss_instances(
 
     # --- 2. MATCHED LOSS (True Positives) ---
     # Goal: Refine the shape of correctly identified instances
+    effective_tp = 0  # Count actually processed matches after exclusions
+    effective_tp = 0  # Count actually processed matches after exclusions
     if len(matches) > 0:
-        p_indices, g_indices, scores_matched = [], [], []
-        for p_idx, g_idx, _ in matches:
-            # Filter matches; used to filter out prompted predictions
-            if exclude_pred_ids and p_idx in exclude_pred_ids:
-                continue
-            p_indices.append(p_idx)
-            g_indices.append(g_idx)
-            # Track objectness scores for matched instances
-            if p_idx < len(scores):
-                scores_matched.append(scores[p_idx])
+        # Process matched instances in chunks to reduce memory usage
+        chunk_size = 20  # Process 20 instances at a time
+        matched_loss = torch.tensor(0.0, device=gt_masks.device)
         
-        if len(p_indices) > 0:
-            p_masks = torch.stack([preds[i] for i in p_indices])
-            gt_masks_matched = torch.stack([gt_masks[i] for i in g_indices]).float()
-
-            fit = goodness_of_fit(p_masks, gt_masks_matched)
-            # Use dice_loss: higher when predictions are BAD, lower when GOOD
-            total_loss += fit["dice_loss"].sum()  # Sum across matched instances
+        for chunk_start in range(0, len(matches), chunk_size):
+            chunk_end = min(chunk_start + chunk_size, len(matches))
+            chunk_matches = matches[chunk_start:chunk_end]
             
-            # Add objectness loss for matched instances
-            if len(scores_matched) > 0:
-                scores_matched = torch.stack(scores_matched).squeeze(-1)  # [N_matched]
-                objectness_loss = F.binary_cross_entropy(scores_matched, torch.ones_like(scores_matched))
-                total_loss += objectness_loss
+            p_indices = []
+            g_indices = []
+            scores_matched = []
+            for p_idx, g_idx, _ in chunk_matches:
+                # Filter matches; used to filter out prompted predictions
+                if exclude_pred_ids and p_idx in exclude_pred_ids:
+                    continue
+                p_indices.append(p_idx)
+                g_indices.append(g_idx)
+                # Track objectness scores for matched instances
+                if p_idx < len(scores):
+                    scores_matched.append(scores[p_idx])
+            
+            effective_tp += len(p_indices)
+            
+            if len(p_indices) > 0:
+                p_masks = torch.stack([preds[i] for i in p_indices])
+                gt_masks_matched = torch.stack([gt_masks[i] for i in g_indices]).float()
+                
+                fit = goodness_of_fit(p_masks, gt_masks_matched)
+                # Use dice_loss: higher when predictions are BAD, lower when GOOD
+                matched_loss = matched_loss + fit["dice_loss"].sum()
+                
+                # Add objectness loss for matched instances
+                if len(scores_matched) > 0:
+                    scores_matched = torch.stack(scores_matched).squeeze(-1)
+                    objectness_loss = F.binary_cross_entropy(scores_matched, torch.ones_like(scores_matched))
+                    matched_loss = matched_loss + objectness_loss
+        
+        total_loss = total_loss + matched_loss
+    
+    TP = effective_tp  # Set TP to the number of actually processed matches
 
     normalize = TP + FN - (len(exclude_pred_ids) if exclude_pred_ids is not None else 0)
     
