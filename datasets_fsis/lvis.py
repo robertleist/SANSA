@@ -12,6 +12,7 @@ from datasets.transform_utils import polygons_to_bitmask
 import pycocotools.mask as mask_util
 from torchvision import transforms
 from torchvision.transforms.functional import resize
+from util.dynamics import labels_to_flows
 
 
 class DatasetLVIS(Dataset):
@@ -23,6 +24,7 @@ class DatasetLVIS(Dataset):
             split,
             shot,
             use_original_imgsize,
+            use_cellpose_targets=False,
             min_instances=2,
     ):
         self.split = 'val' if split in ['val', 'test'] else 'trn'
@@ -33,6 +35,7 @@ class DatasetLVIS(Dataset):
         self.base_path = os.path.join(datapath, "LVIS", 'coco')
         self.transform = transform
         self.use_original_imgsize = use_original_imgsize
+        self.use_cellpose_targets = use_cellpose_targets
         self.min_instances = min_instances
 
         # 1. Load raw metadata
@@ -79,20 +82,53 @@ class DatasetLVIS(Dataset):
         img_tensor = self.transform(image)
         processed_instances = []
         for instance in instances:
-            # Standardizing mask size if necessary
+            instance = instance.float()
             if not self.use_original_imgsize:
-                # Interpolate or pad logic here if needed
-                pass
-            processed_instances.append(instance.permute(1, 0).float())
+                instance = F.interpolate(
+                    instance.unsqueeze(0).unsqueeze(0),
+                    size=img_tensor.shape[-2:],
+                    mode='nearest'
+                ).squeeze(0).squeeze(0)
+            processed_instances.append(instance)
 
-        return {
+        instances_tensor = torch.stack(processed_instances) if processed_instances else torch.empty(0)
+
+        cellpose_target = None
+        if self.use_cellpose_targets:
+            if instances_tensor.numel() > 0:
+                label_map = torch.zeros_like(instances_tensor[0], dtype=torch.int32)
+                for i, inst_mask in enumerate(instances_tensor):
+                    label_map[inst_mask > 0.5] = i + 1
+
+                label_np = label_map.cpu().numpy().astype(np.uint16)
+                flows_np = labels_to_flows([label_np], device=None, redo_flows=False)[0]
+
+                # flows_np order: [label, cellprob, y_flow, x_flow]
+                cellprob_np = flows_np[1]
+                x_flow_np = flows_np[3]
+                y_flow_np = flows_np[2]
+
+                cellpose_target = torch.from_numpy(
+                    np.stack([cellprob_np, x_flow_np, y_flow_np], axis=0)
+                ).float()
+            else:
+                # empty target for no instances
+                h, w = img_tensor.shape[-2:]
+                cellpose_target = torch.zeros((3, h, w), dtype=torch.float32)
+
+        output = {
             'image': img_tensor,
-            'instances': torch.stack(processed_instances) if processed_instances else torch.empty(0),
+            'instances': instances_tensor,
             'category_id': cat_id,
             'img_name': img_name,
             'img_id': int((img_name.split('.')[0]).split('/')[-1]),  # get the image id from the name
             'org_size': org_size
         }
+
+        if self.use_cellpose_targets:
+            output['cellpose_target'] = cellpose_target
+
+        return output
 
     def load_category_instances(self, img_name, cat_id):
         img_path = os.path.join(self.base_path, img_name)
@@ -166,6 +202,7 @@ def build(image_set, args):
         transform=transform,
         shot=args.shots,  # Number of GT prompts to provide to start the sequence
         use_original_imgsize=False,
+        use_cellpose_targets=getattr(args, 'cellpose_targets', False),
         split=image_set
     )
 

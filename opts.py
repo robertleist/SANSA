@@ -28,6 +28,8 @@ def add_data_args(parser: argparse.ArgumentParser, default_dataset: str = "coco"
                             "pascal_part", "paco_part", "deepglobe", "isic", "lung", "ade20k", "multi"
                         ],
                         help="Dataset name. Use 'multi' for training the generalist model.")
+    parser.add_argument("--cellpose_targets", action='store_true', default=False,
+                        help="If set, dataset will prepare Cellpose-style targets (object probability, x-flow, y-flow) in dataset samples.")
     parser.add_argument("--multi_train", nargs="+", type=str, default=["lvis", "coco", "ade20k", "paco_part"],
                         help="Datasets to mix when dataset_file='multi'.")
     parser.add_argument("--ds_weight", nargs="+", type=float, default=[0.4, 0.45, 0.1, 0.05],

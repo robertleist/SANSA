@@ -205,14 +205,13 @@ def loss_instances(
     # Ensure regularization operates on sigmoid'd predictions for proper gradients
     if len(preds) > 0:
         pred_masks_sigmoid = torch.stack([p.sigmoid() for p in preds])
-        regularization_loss = regularize_overlap(pred_masks_sigmoid, weight=0.1)
+        regularization_loss = regularize_overlap(pred_masks_sigmoid, weight=1.)
         total_loss = total_loss + regularization_loss
     else:
         regularization_loss = torch.tensor(0.0, device=gt_masks.device)
 
     # --- 2. MATCHED LOSS (True Positives) ---
     # Goal: Refine the shape of correctly identified instances
-    effective_tp = 0  # Count actually processed matches after exclusions
     effective_tp = 0  # Count actually processed matches after exclusions
     if len(matches) > 0:
         # Process matched instances in chunks to reduce memory usage
