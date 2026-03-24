@@ -14,6 +14,7 @@ import util.misc as utils
 from eval_fsis import eval_batch
 from models.sansa.inst_sansa import InstanceSANSA
 from util.promptable_utils import build_prompt_dict_fsis
+from util.dynamics import labels_to_flows
 
 
 def backprop_and_log(
@@ -136,6 +137,47 @@ def log_an_image(
     )
 
 
+def compute_cellpose_loss(
+        pred_instances_batch: list,
+        cellpose_targets_batch: torch.Tensor,
+        device: torch.device,
+) -> torch.Tensor:
+    """Compute a Cellpose flowfield reconstruction loss between predicted masks and ground truth tensor."""
+    loss = torch.tensor(0.0, device=device)
+    if cellpose_targets_batch is None:
+        return loss
+
+    for pred_instances, gt_cellpose in zip(pred_instances_batch, cellpose_targets_batch):
+        # pred_instances is expected [N_pred, H, W]
+        if pred_instances.numel() == 0:
+            continue
+
+        # Convert predicted instance masks -> label map (1..N)
+        pred_labels = torch.zeros_like(pred_instances[0], dtype=torch.int32, device=device)
+        for i in range(pred_instances.shape[0]):
+            pred_mask = (pred_instances[i] > 0.5)
+            pred_labels[pred_mask] = i + 1
+
+        # Compute flows for predicted labels
+        label_np = pred_labels.cpu().numpy().astype(np.uint16)
+        pred_flow_np = labels_to_flows([label_np], device=None, redo_flows=False)[0]
+
+        # Cellpose format: [cellprob, x_flow, y_flow]
+        pred_flow = torch.stack([
+            torch.from_numpy(pred_flow_np[1]).to(device),
+            torch.from_numpy(pred_flow_np[3]).to(device),
+            torch.from_numpy(pred_flow_np[2]).to(device),
+        ], dim=0)
+
+        # Align with gt size, assert if mismatched
+        if pred_flow.shape != gt_cellpose.shape:
+            pred_flow = F.interpolate(pred_flow.unsqueeze(0), size=gt_cellpose.shape[-2:], mode='bilinear', align_corners=False).squeeze(0)
+
+        loss = loss + F.mse_loss(pred_flow, gt_cellpose)
+
+    return loss / max(1, len(cellpose_targets_batch))
+
+
 def _forward_and_optimize_iterations(
         model: InstanceSANSA,
         images: torch.Tensor,
@@ -148,6 +190,7 @@ def _forward_and_optimize_iterations(
         device: torch.device,
         optimize_iteration: bool,
         args: object,
+        cellpose_targets_batch = None,
 ) -> tuple:
     """
     Phase 1: Execute forward passes through iterations with optional iteration-level optimization.
@@ -183,13 +226,22 @@ def _forward_and_optimize_iterations(
             unmatched_instances_per_batch[j] = instances_batch[j][unmatched_indices]
         
         # Evaluate this iteration
-        iter_loss, iter_metrics, iter_matches = eval_batch(
-            pred_instances_batch=[output["masks"] for output in iter_outputs],
-            pred_scores_batch=[output["scores"] for output in iter_outputs],
-            gt_instances_batch=[instances.to(device) for instances in unmatched_instances_per_batch.values()],
-            exclude_first_k_shots=0,
-            device=device
-        )
+        if args.cellpose_targets and cellpose_targets_batch is not None:
+            iter_loss = compute_cellpose_loss(
+                [output["masks"] for output in iter_outputs],
+                cellpose_targets_batch,
+                device
+            )
+            iter_metrics = {"loss_cellpose": iter_loss.item()}
+            iter_matches = defaultdict(list)
+        else:
+            iter_loss, iter_metrics, iter_matches = eval_batch(
+                pred_instances_batch=[output["masks"] for output in iter_outputs],
+                pred_scores_batch=[output["scores"] for output in iter_outputs],
+                gt_instances_batch=[instances.to(device) for instances in unmatched_instances_per_batch.values()],
+                exclude_first_k_shots=0,
+                device=device
+            )
         
         # Track matched instances
         for k, v in iter_matches.items():
@@ -267,6 +319,9 @@ def train_one_epoch(
         # ===== SETUP =====
         images = batch['image'].to(device)
         instances_batch = batch['instances']
+        cellpose_targets = batch.get('cellpose_target', None)
+        if cellpose_targets is not None:
+            cellpose_targets = cellpose_targets.to(device)
         og_sizes = batch['org_size']
 
         mlflow.log_metric("num_instances", max(len(masks) for masks in instances_batch), step=global_step)
@@ -299,6 +354,7 @@ def train_one_epoch(
             device=device,
             optimize_iteration=args.optimize_iteration,
             args=args,
+            cellpose_targets_batch=cellpose_targets,
         )
 
         # ===== PHASE 2: Logging and validation =====

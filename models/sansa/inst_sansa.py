@@ -17,6 +17,11 @@ from models.sansa.model_utils import BackboneOutput, DecoderOutput
 from util.path_utils import SAM2_PATHS_CONFIG, SAM2_WEIGHTS_URL
 from util.promptable_utils import rescale_prompt
 
+from models.sam2.modeling.sam2_utils import preprocess
+from models.sansa.model_utils import BackboneOutput, DecoderOutput
+from util.path_utils import SAM2_PATHS_CONFIG, SAM2_WEIGHTS_URL
+from util.promptable_utils import rescale_prompt
+
 
 class InstanceSANSA(nn.Module):
     def __init__(
@@ -292,6 +297,69 @@ class InstanceSANSA(nn.Module):
                 for k, v in iter_outputs[b].items():
                     batch_outputs[b][k].append(v)
         return batch_outputs
+
+
+class CellposeSANSA(InstanceSANSA):
+    def __init__(self, sam: SAM2Base, device: torch.device):
+        super().__init__(sam, device)
+        self.flow_head = nn.Sequential(
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 3, kernel_size=1)
+        )
+
+    def _compute_decoder_out_no_mem(
+            self,
+            backbone_out: BackboneOutput,
+            idx: int,
+            prompt_input: Dict[str, torch.Tensor] | None,
+    ) -> DecoderOutput:
+        decoder_out = super()._compute_decoder_out_no_mem(backbone_out, idx, prompt_input)
+        current_vision_feats = backbone_out.get_current_feats(idx)
+        pix_feat_no_mem = current_vision_feats[-1:][-1] + self.sam.no_mem_embed
+        pix_feat_no_mem = pix_feat_no_mem.permute(1, 2, 0).view(1, 256, 64, 64)
+        decoder_out.flow = self.flow_head(pix_feat_no_mem)
+        return decoder_out
+
+    def _compute_decoder_out_w_mem(
+            self,
+            backbone_out: BackboneOutput,
+            idx: int,
+            memory_idx: int,
+            memory_bank: Dict[int, Dict[str, torch.Tensor]],
+    ) -> DecoderOutput:
+        decoder_out = super()._compute_decoder_out_w_mem(backbone_out, idx, memory_idx, memory_bank)
+        current_vision_feats = backbone_out.get_current_feats(idx)
+        current_vision_pos_embeds = backbone_out.get_current_pos_embeds(idx)
+
+        pix_feat_with_mem = self.sam._prepare_memory_conditioned_features(
+            frame_idx=memory_idx,
+            current_vision_feats=current_vision_feats[-1:],
+            current_vision_pos_embeds=current_vision_pos_embeds[-1:],
+            feat_sizes=backbone_out.feat_sizes[-1:],
+            num_frames=memory_idx + 1,
+            memory_bank=memory_bank
+        )
+        decoder_out.flow = self.flow_head(pix_feat_with_mem)
+        return decoder_out
+
+    def forward(
+            self,
+            image_batch: torch.Tensor,
+            prompt_batch: torch.Tensor,
+            memory_batch: dict[int, dict[int, dict[str, torch.Tensor]]],
+            current_iteration: int,
+    ):
+        batch_output, memory_batch = super().forward(image_batch, prompt_batch, memory_batch, current_iteration)
+        # convert masks+score outputs to include flows from decoder
+        for b_idx in range(len(batch_output)):
+            flows = []
+            for it in batch_output[b_idx]["masks"]:
+                # currently flow exists only as `decoder_out.flow` in parent run; not available here
+                # fallback: placeholder zero flows
+                flows.append(torch.zeros((3, image_batch.shape[-2], image_batch.shape[-1]), device=image_batch.device))
+            batch_output[b_idx]["flows"] = torch.stack(flows, dim=1)
+        return batch_output, memory_batch
 
 
 def build_inst_sansa(
